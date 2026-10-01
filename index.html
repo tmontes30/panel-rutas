@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="es" data-mode="viewer">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visibilidad de rutas SimpliRoute</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚚</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!--
+    Este archivo es la fuente de las DOS versiones del dashboard:
+    - Local (owner): se sirve tal cual desde server.py.
+    - Link compartido: publish.py lo transforma y BORRA todo lo que esta entre
+      los marcadores owner-only:start / owner-only:end. Cualquier control que
+      no deba ver el equipo (Actualizar, Publicar, Usuarios) va adentro de esos
+      marcadores.
+  -->
+  <h1>Visibilidad de rutas SimpliRoute</h1>
+  
+
+  <div class="toolbar">
+    <div class="toolbar-row">
+      
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="exclude-descarga" />
+        Excluir paradas "Descarga" (CD)
+      </label>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="only-fbs" />
+        Solo FBS
+      </label>
+
+      <span class="sort-label">Turno (por ventana)</span>
+      <div class="segmented" id="ampm-filter" role="group" aria-label="Filtrar por turno AM/PM">
+        <button type="button" class="segment active" data-ampm="all">Todos</button>
+        <button type="button" class="segment" data-ampm="am">AM (antes 12:30)</button>
+        <button type="button" class="segment" data-ampm="pm">PM (después 12:30)</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab active" id="tab-btn-rutas" data-tab="rutas" role="tab" aria-selected="true">Rutas en vivo</button>
+    <button type="button" class="tab" id="tab-btn-analisis" data-tab="analisis" role="tab" aria-selected="false">Análisis</button>
+    <button type="button" class="tab" id="tab-btn-duracion" data-tab="duracion" role="tab" aria-selected="false">Duración de visitas</button>
+    <button type="button" class="tab" id="tab-btn-sabana" data-tab="sabana" role="tab" aria-selected="false">Sábana (CSV)</button>
+    <button type="button" class="tab" id="tab-btn-fallidos" data-tab="fallidos" role="tab" aria-selected="false">Fallidos</button>
+    
+  </div>
+
+  <div id="status-line"></div>
+
+  <section id="tab-rutas" class="tab-panel">
+    <div class="toolbar">
+      <div class="toolbar-row filters-row">
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="search" list="seller-list" placeholder="Buscar seller..." />
+          <datalist id="seller-list"></datalist>
+        </div>
+
+        <div class="chip-group" id="status-filter" role="group" aria-label="Filtrar por estado">
+          <button type="button" class="chip active" data-kind="status" data-value="pending">● Pendiente</button>
+          <button type="button" class="chip active" data-kind="status" data-value="completed">● Completada</button>
+          <button type="button" class="chip active" data-kind="status" data-value="failed">● Fallida</button>
+          <button type="button" class="chip active" data-kind="status" data-value="skipped">● Salteada</button>
+        </div>
+
+        <button type="button" class="chip live-toggle" id="only-live-eta">🚚 En camino ahora</button>
+      </div>
+
+      <div class="toolbar-row">
+        <span class="sort-label">Ordenar</span>
+        <div class="segmented" id="sort" role="group" aria-label="Ordenar">
+          <button type="button" class="segment active" data-sort="route-order">Orden en ruta</button>
+          <button type="button" class="segment" data-sort="eta-asc">Próximo ETA</button>
+          <button type="button" class="segment" data-sort="seller-asc">Seller A-Z</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="cargo-summary"></div>
+    <div id="summary-line"></div>
+    <div id="results"></div>
+  </section>
+
+  <section id="tab-analisis" class="tab-panel" hidden>
+    <div class="toolbar">
+      <div class="toolbar-row filters-row">
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="analysis-search" list="seller-list" placeholder="Filtrar análisis por seller..." />
+        </div>
+      </div>
+    </div>
+    <div id="analysis-results"></div>
+  </section>
+
+  <section id="tab-duracion" class="tab-panel" hidden>
+    <div class="toolbar">
+      <div class="toolbar-row filters-row">
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="duration-search" list="seller-list" placeholder="Filtrar por seller..." />
+        </div>
+
+        <div class="segmented" id="duration-sort" role="group" aria-label="Ordenar por duración">
+          <button type="button" class="segment active" data-sort="duration-desc">Más lentas primero</button>
+          <button type="button" class="segment" data-sort="duration-asc">Más rápidas primero</button>
+          <button type="button" class="segment" data-sort="checkout-desc">Últimas retiradas</button>
+        </div>
+      </div>
+    </div>
+    <div id="duration-results"></div>
+  </section>
+
+  <section id="tab-sabana" class="tab-panel" hidden>
+    <div class="toolbar">
+      <div class="toolbar-row filters-row">
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="sabana-search" list="seller-list" placeholder="Filtrar por seller..." />
+        </div>
+        <button type="button" id="download-csv">⬇ Descargar CSV</button>
+      </div>
+    </div>
+    <div id="sabana-count"></div>
+    <div id="sabana-results" class="table-scroll"></div>
+  </section>
+
+  <section id="tab-fallidos" class="tab-panel" hidden>
+    <div class="toolbar">
+      <div class="toolbar-row filters-row">
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="failed-search" list="seller-list" placeholder="Filtrar por seller..." />
+        </div>
+        <button type="button" id="download-failed-csv">⬇ Descargar CSV</button>
+      </div>
+    </div>
+    <div id="failed-groups"></div>
+    <div id="failed-results"></div>
+  </section>
+
+  
+
+  <script src="app.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>
