@@ -104,7 +104,7 @@
 
   function showDashboard(decrypted, publishedAt) {
     currentPublishedAt = publishedAt;
-    overlay.hidden = true;
+    overlay.remove();
     document.body.classList.add("unlocked");
     window.srLoadSnapshot(decrypted.snapshot, { published_at: decrypted.published_at });
     clearInterval(pollTimer);
