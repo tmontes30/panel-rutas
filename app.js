@@ -17,6 +17,8 @@ const statusLine = document.getElementById("status-line");
 const summaryLine = document.getElementById("summary-line");
 const cargoSummaryEl = document.getElementById("cargo-summary");
 const resultsEl = document.getElementById("results");
+const vista1SearchInput = document.getElementById("vista1-search");
+const vista1ResultsEl = document.getElementById("vista1-results");
 const analysisSearchInput = document.getElementById("analysis-search");
 const analysisResultsEl = document.getElementById("analysis-results");
 const durationSearchInput = document.getElementById("duration-search");
@@ -717,6 +719,338 @@ function renderAnalysis() {
   });
 }
 
+// ---------- Pestaña Vista 1 (árboles de cumplimiento) ----------
+
+// Umbral que separa "un poco" de "mucho" fuera de ventana (tarde o temprano).
+const V1_GAP_MIN = 30;
+// Al llegar >30 min antes, se revisa si el camion siguio en el sitio al
+// menos estos minutos despues de que abrio la ventana (check-out >= inicio + 20).
+const V1_WAIT_AFTER_OPEN_MIN = 20;
+// Minutos fijos de cada visita (estacionar, papeleo) que no se cargan a los
+// bultos al calcular "minutos por bulto".
+const V1_FIXED_VISIT_MIN = 20;
+const V1_SIZE_BUCKETS = [
+  { key: "q-0", label: "Hasta 50 pedidos", test: (q) => q <= 50 },
+  { key: "q-50", label: "51 a 100 pedidos", test: (q) => q > 50 && q <= 100 },
+  { key: "q-100", label: "101 a 150 pedidos", test: (q) => q > 100 && q <= 150 },
+  { key: "q-150", label: "Más de 150 pedidos", test: (q) => q > 150 },
+];
+
+let vista1Selected = null;
+
+// Clasifica cada parada una sola vez; los cuatro arboles se arman filtrando
+// estas mismas filas, asi un numero nunca cuenta distinto entre arboles.
+function classifyVista1Stop(stop, planDate, now) {
+  const st = (stop.status || "pending").toLowerCase();
+  const ws = parseLocalDateTime(planDate, stop.window_start);
+  const we = parseLocalDateTime(planDate, stop.window_end);
+  const checkin = stop.checkin_time ? new Date(stop.checkin_time) : null;
+  const checkout = stop.checkout_time ? new Date(stop.checkout_time) : null;
+  const row = {
+    ...stop,
+    pactado: toNumber(stop.load_2),
+    retirado: toNumber(stop.bultos_retirados),
+    dwellMin: checkin && checkout ? (checkout - checkin) / 60000 : null,
+    windowClass: null, // "cumplido" | "tarde" | "temprano" | "no_pasa" | "en_curso" | "sin_ventana"
+    gapMin: null,
+    waitedAfterOpen: null, // true | false | null (sin check-out aun)
+  };
+
+  if (!checkin) {
+    // Pendiente con la ventana todavia abierta: aun puede cumplir, no se juzga.
+    row.windowClass = st === "pending" && (!we || we > now) ? "en_curso" : "no_pasa";
+    return row;
+  }
+  if (!ws || !we) {
+    row.windowClass = "sin_ventana";
+    return row;
+  }
+  if (checkin > we) {
+    row.windowClass = "tarde";
+    row.gapMin = (checkin - we) / 60000;
+  } else if (checkin < ws) {
+    row.windowClass = "temprano";
+    row.gapMin = (ws - checkin) / 60000;
+    if (checkout) row.waitedAfterOpen = (checkout - ws) / 60000 >= V1_WAIT_AFTER_OPEN_MIN;
+  } else {
+    row.windowClass = "cumplido";
+  }
+  return row;
+}
+
+function vista1Node(key, label, stops, children = [], hint = "") {
+  return { key, label, stops, children, hint };
+}
+
+function vista1Metrics(stops) {
+  // Retirado vs pactado solo sobre visitas ya cerradas: si el chofer sigue en
+  // el seller (sin check-out) todavia no registro bultos y bajaria el %.
+  const closed = stops.filter((s) => ["completed", "failed", "skipped"].includes((s.status || "").toLowerCase()));
+  const pactado = closed.reduce((sum, s) => sum + s.pactado, 0);
+  const retirado = closed.reduce((sum, s) => sum + s.retirado, 0);
+  const withDwell = stops.filter((s) => s.dwellMin !== null);
+  const avgDwell = withDwell.length ? withDwell.reduce((sum, s) => sum + s.dwellMin, 0) / withDwell.length : null;
+  // Promedio ponderado: minutos de visita (sin los 20 fijos) / bultos retirados.
+  const perPkgStops = withDwell.filter((s) => s.retirado > 0);
+  const perPkgBultos = perPkgStops.reduce((sum, s) => sum + s.retirado, 0);
+  const perPkg = perPkgBultos
+    ? perPkgStops.reduce((sum, s) => sum + Math.max(s.dwellMin - V1_FIXED_VISIT_MIN, 0), 0) / perPkgBultos
+    : null;
+  return { count: stops.length, pactado, retirado, avgDwell, perPkg };
+}
+
+function buildVista1Trees(rows) {
+  const by = (cls) => rows.filter((r) => r.windowClass === cls);
+  const tarde = by("tarde");
+  const temprano = by("temprano");
+  const cumplido = by("cumplido");
+  const noPasa = by("no_pasa");
+  const tempranoMucho = temprano.filter((r) => r.gapMin > V1_GAP_MIN);
+  const incumplidos = [...noPasa, ...tarde, ...temprano];
+  const evaluadas = [...incumplidos, ...cumplido];
+
+  const cumplimiento = vista1Node("c", "Visitas que ya debían pasar", evaluadas, [
+    vista1Node("c-ok", "✅ Llegó a la hora", cumplido, [], "Check-in dentro de la ventana."),
+    vista1Node("c-inc", "No llegó a la hora", incumplidos, [
+      vista1Node("c-temp", "⏰ Llegó temprano", temprano, [
+        vista1Node("c-temp-mucho", `Más de ${V1_GAP_MIN} min antes`, tempranoMucho, [
+          vista1Node("c-temp-esp", `Esperó ${V1_WAIT_AFTER_OPEN_MIN} min de abierta la ventana`, tempranoMucho.filter((r) => r.waitedAfterOpen === true), [], `Su check-out fue al menos ${V1_WAIT_AFTER_OPEN_MIN} min después de que abrió la ventana.`),
+          vista1Node("c-temp-noesp", "Se fue sin esperar", tempranoMucho.filter((r) => r.waitedAfterOpen === false), [], `Hizo check-out antes de cumplirse ${V1_WAIT_AFTER_OPEN_MIN} min de abierta la ventana.`),
+          vista1Node("c-temp-sinco", "Todavía en el seller", tempranoMucho.filter((r) => r.waitedAfterOpen === null), [], "Hizo check-in pero aún no hace check-out."),
+        ], "Check-in más de 30 min antes de que abriera la ventana."),
+        vista1Node("c-temp-poco", `Menos de ${V1_GAP_MIN} min antes`, temprano.filter((r) => r.gapMin <= V1_GAP_MIN)),
+      ], "Check-in antes de que abriera la ventana."),
+      vista1Node("c-tarde", "🐢 Llegó tarde", tarde, [
+        vista1Node("c-tarde-mucho", `Más de ${V1_GAP_MIN} min tarde`, tarde.filter((r) => r.gapMin > V1_GAP_MIN)),
+        vista1Node("c-tarde-poco", `Menos de ${V1_GAP_MIN} min tarde`, tarde.filter((r) => r.gapMin <= V1_GAP_MIN)),
+      ], "Check-in después de que cerró la ventana."),
+      vista1Node("c-nopasa", "❌ No pasó", noPasa, [], "Se cerró la ventana y el camión nunca hizo check-in."),
+    ]),
+  ]);
+
+  // Retiro 0: se prometio algo (Carga 2 > 0), la visita ya cerro y no se retiro nada.
+  const retiroCero = rows.filter((r) => {
+    const st = (r.status || "").toLowerCase();
+    return r.pactado > 0 && r.retirado === 0 && (st === "completed" || st === "failed" || st === "skipped");
+  });
+  const retiroCeroTree = vista1Node("r0", "Visitas con pedidos donde no se retiró nada", retiroCero, [
+    vista1Node("r0-ok", "✅ Había llegado a la hora", retiroCero.filter((r) => r.windowClass === "cumplido")),
+    vista1Node("r0-inc", "No había llegado a la hora", retiroCero.filter((r) => r.windowClass !== "cumplido"), [], "Llegó temprano, tarde o no hizo check-in."),
+  ]);
+
+  const withDwell = rows.filter((r) => r.dwellMin !== null);
+  const permanenciaTipo = vista1Node("pt", "Visitas terminadas", withDwell,
+    V1_SIZE_BUCKETS.map((b) => vista1Node(`pt-${b.key}`, b.label, withDwell.filter((r) => b.test(r.pactado)))));
+
+  const permanenciaCumpl = vista1Node("pc", "Visitas terminadas", withDwell, [
+    vista1Node("pc-ok", "✅ Llegó a la hora", withDwell.filter((r) => r.windowClass === "cumplido")),
+    vista1Node("pc-temp", "⏰ Llegó temprano", withDwell.filter((r) => r.windowClass === "temprano")),
+    vista1Node("pc-tarde", "🐢 Llegó tarde", withDwell.filter((r) => r.windowClass === "tarde")),
+  ]);
+
+  return { cumplimiento, retiroCeroTree, permanenciaTipo, permanenciaCumpl, evaluadas, cumplido };
+}
+
+function vista1Pct(part, total) {
+  return total ? `${Math.round((part / total) * 100)}%` : "-";
+}
+
+// Color de cada caja segun lo que significa (verde bien, amarillo temprano,
+// rojo mal). Se deduce de la key del nodo para no repetirlo en cada vista1Node.
+function vista1Tone(key) {
+  if (/-ok$|-esp$/.test(key)) return "ok";
+  if (/inc|tarde|nopasa|noesp|^r0$/.test(key)) return "bad";
+  if (/temp/.test(key)) return "warn";
+  return "neutral";
+}
+
+function renderVista1Tree(container, { title, description, root, showDwell }) {
+  const card = document.createElement("div");
+  card.className = "insight-card sev-info";
+  card.innerHTML = `
+    <div class="insight-header"><h3>${esc(title)}</h3></div>
+    <p class="insight-desc">${esc(description)}</p>
+  `;
+
+  // Organigrama: cada caja es una rama; sus hijas cuelgan debajo con lineas.
+  const buildBranch = (node, parentCount) => {
+    const m = vista1Metrics(node.stops);
+    const li = document.createElement("li");
+    const box = document.createElement("div");
+    box.className = `org-box tone-${vista1Tone(node.key)}${vista1Selected === node.key ? " selected" : ""}`;
+    box.dataset.key = node.key;
+    box.title = `${node.hint ? node.hint + " " : ""}Clic para ver la lista de sellers.`;
+    const pctLine = parentCount === null ? "" : `<div class="org-pct">${vista1Pct(m.count, parentCount)} de la caja de arriba</div>`;
+    const pickupLine = m.pactado
+      ? `<div class="org-line">📦 Retiró ${formatQty(m.retirado)} de ${formatQty(m.pactado)} (${vista1Pct(m.retirado, m.pactado)})</div>`
+      : "";
+    const dwellLine = showDwell && m.avgDwell !== null
+      ? `<div class="org-line">⏱ ${formatMinutes(m.avgDwell)} promedio en el seller</div>` +
+        (m.perPkg !== null ? `<div class="org-line" title="Descontando ${V1_FIXED_VISIT_MIN} min fijos por visita">≈ ${Math.round(m.perPkg * 60)} s por bulto</div>` : "")
+      : "";
+    box.innerHTML = `
+      <div class="org-title">${esc(node.label)}</div>
+      <div class="org-count">${m.count}</div>
+      ${pctLine}${pickupLine}${dwellLine}
+    `;
+    li.appendChild(box);
+    if (node.children.length) {
+      const ul = document.createElement("ul");
+      node.children.forEach((child) => ul.appendChild(buildBranch(child, m.count)));
+      li.appendChild(ul);
+    }
+    return li;
+  };
+
+  const chart = document.createElement("div");
+  chart.className = "org";
+  const rootUl = document.createElement("ul");
+  rootUl.appendChild(buildBranch(root, null));
+  chart.appendChild(rootUl);
+
+  const nodesByKey = {};
+  const index = (node) => {
+    nodesByKey[node.key] = node;
+    node.children.forEach(index);
+  };
+  index(root);
+
+  chart.addEventListener("click", (e) => {
+    const box = e.target.closest(".org-box");
+    if (!box) return;
+    vista1Selected = vista1Selected === box.dataset.key ? null : box.dataset.key;
+    renderVista1();
+  });
+
+  const scroll = document.createElement("div");
+  scroll.className = "org-scroll";
+  scroll.appendChild(chart);
+  card.appendChild(scroll);
+
+  const selected = nodesByKey[vista1Selected];
+  if (selected) card.appendChild(renderVista1Detail(selected));
+
+  container.appendChild(card);
+}
+
+const V1_CLASS_LABELS = {
+  cumplido: "Cumplido",
+  tarde: "Tarde",
+  temprano: "Temprano",
+  no_pasa: "No pasa",
+  en_curso: "En curso",
+  sin_ventana: "Sin ventana",
+};
+
+function renderVista1Detail(node) {
+  const wrap = document.createElement("div");
+  wrap.className = "tree-detail";
+  const title = document.createElement("div");
+  title.className = "tree-detail-title";
+  title.textContent = `Detalle: ${node.label} (${node.stops.length})`;
+  wrap.appendChild(title);
+
+  if (node.stops.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No hay paradas en esta rama.";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+
+  const rows = [...node.stops].sort((a, b) => (b.gapMin ?? -1) - (a.gapMin ?? -1));
+  const table = document.createElement("table");
+  table.innerHTML = `
+    <thead><tr>
+      <th>Seller</th><th>Seller ID</th><th>Vehículo / Chofer</th><th>Estado</th><th>Ventana</th>
+      <th>Check-in</th><th>Check-out</th><th>Cumplimiento</th><th>Permanencia</th><th>Pactado</th><th>Retirado</th>
+    </tr></thead>
+    <tbody>${rows
+      .map((r) => {
+        const gap = r.gapMin !== null ? ` (${formatMinutes(r.gapMin)})` : "";
+        return `<tr>
+          <td>${esc(r.seller_name || "(sin nombre)")}</td>
+          <td>${sellerIdLabel(r)}</td>
+          <td>${esc(r.vehicle_name || "-")}<br><span style="color:var(--muted);font-size:0.75rem">${esc(r.driver_name || "-")}</span></td>
+          <td>${statusBadge(r.status)}</td>
+          <td>${formatWindow(r)}</td>
+          <td>${formatEta(r.checkin_time)}</td>
+          <td>${formatEta(r.checkout_time)}</td>
+          <td>${esc(V1_CLASS_LABELS[r.windowClass] || "-")}${gap}</td>
+          <td>${r.dwellMin === null ? "-" : formatMinutes(r.dwellMin)}</td>
+          <td>${formatQty(r.pactado)}</td>
+          <td>${formatQty(r.retirado)}</td>
+        </tr>`;
+      })
+      .join("")}</tbody>
+  `;
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll";
+  scroll.appendChild(table);
+  wrap.appendChild(scroll);
+  return wrap;
+}
+
+function renderVista1() {
+  vista1ResultsEl.innerHTML = "";
+  const data = getWorkingData();
+  if (!data) return;
+
+  const query = vista1SearchInput.value.trim().toLowerCase();
+  let stops = flattenAllStops(data);
+  if (query) stops = stops.filter((s) => (s.seller_name || "").toLowerCase().includes(query));
+
+  const now = new Date();
+  const rows = stops.map((s) => classifyVista1Stop(s, data.date, now));
+  const trees = buildVista1Trees(rows);
+  const enCurso = rows.filter((r) => r.windowClass === "en_curso").length;
+  const sinVentana = rows.filter((r) => r.windowClass === "sin_ventana").length;
+  const cumplPct = trees.evaluadas.length ? Math.round((trees.cumplido.length / trees.evaluadas.length) * 100) : null;
+
+  const summary = document.createElement("div");
+  summary.className = "summary-strip";
+  const m = vista1Metrics(trees.evaluadas);
+  summary.innerHTML = `
+    <div class="summary-tile ${cumplPct !== null && cumplPct < 80 ? "sev-warning" : "sev-ok"}"><div class="value">${cumplPct === null ? "-" : cumplPct + "%"}</div><div class="label">Llegaron a la hora</div></div>
+    <div class="summary-tile"><div class="value">${vista1Pct(m.retirado, m.pactado)}</div><div class="label">De lo prometido se retiró</div></div>
+    <div class="summary-tile ${trees.retiroCeroTree.stops.length ? "sev-critical" : "sev-ok"}"><div class="value">${trees.retiroCeroTree.stops.length}</div><div class="label">Visitas sin retirar nada</div></div>
+    <div class="summary-tile" title="Todavía tienen la ventana abierta: aún pueden llegar a la hora, por eso no se cuentan"><div class="value">${enCurso}</div><div class="label">Aún por visitar (no cuentan)</div></div>
+  `;
+  vista1ResultsEl.appendChild(summary);
+
+  const tip = document.createElement("p");
+  tip.className = "insight-desc";
+  tip.textContent =
+    "👆 Haz clic en cualquier caja para ver qué sellers están ahí." +
+    (sinVentana ? ` (${sinVentana} visita(s) sin ventana cargada no se cuentan.)` : "");
+  vista1ResultsEl.appendChild(tip);
+
+  renderVista1Tree(vista1ResultsEl, {
+    title: "1. ¿Llegamos a la hora?",
+    description: "Compara la hora de check-in del chofer con la ventana acordada con el seller.",
+    root: trees.cumplimiento,
+    showDwell: false,
+  });
+  renderVista1Tree(vista1ResultsEl, {
+    title: "2. ¿Dónde no retiramos nada?",
+    description: "Visitas que tenían pedidos (Carga 2) y terminaron con 0 bultos retirados.",
+    root: trees.retiroCeroTree,
+    showDwell: false,
+  });
+  renderVista1Tree(vista1ResultsEl, {
+    title: "3. ¿Cuánto demoramos según el tamaño del seller?",
+    description: "Tiempo entre check-in y check-out, agrupado por cantidad de pedidos del seller.",
+    root: trees.permanenciaTipo,
+    showDwell: true,
+  });
+  renderVista1Tree(vista1ResultsEl, {
+    title: "4. ¿Cuánto demoramos según si llegamos a la hora?",
+    description: "Mismo tiempo en el seller, separado por llegada a la hora, temprano o tarde.",
+    root: trees.permanenciaCumpl,
+    showDwell: true,
+  });
+}
+
 // ---------- Pestaña Duración de visitas ----------
 
 function renderDurations() {
@@ -1113,6 +1447,7 @@ function switchTab(tabName) {
   for (const [name, panel] of Object.entries(tabPanels)) {
     panel.hidden = name !== tabName;
   }
+  if (tabName === "vista1") renderVista1();
   if (tabName === "analisis") renderAnalysis();
   if (tabName === "duracion") renderDurations();
   if (tabName === "sabana") renderSabana();
@@ -1124,6 +1459,7 @@ function renderAllTabs() {
   const data = getWorkingData();
   if (data) populateSellerDatalist(data);
   render();
+  renderVista1();
   renderAnalysis();
   renderDurations();
   renderSabana();
@@ -1353,6 +1689,7 @@ sortEl.addEventListener("click", (e) => {
 for (const btn of tabButtons) {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 }
+vista1SearchInput.addEventListener("input", renderVista1);
 analysisSearchInput.addEventListener("input", renderAnalysis);
 
 durationSearchInput.addEventListener("input", renderDurations);
