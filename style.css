@@ -648,3 +648,144 @@ tr.current-stop td:nth-child(2) {
   font-style: italic;
   padding: 20px 0;
 }
+
+/* Vista 1: árboles tipo organigrama */
+.org-scroll {
+  overflow-x: auto;
+  padding: 8px 0 4px;
+}
+
+.org {
+  display: inline-block;
+  min-width: 100%;
+}
+
+.org ul {
+  display: flex;
+  justify-content: center;
+  position: relative;
+  margin: 0;
+  padding: 20px 0 0;
+}
+
+.org > ul {
+  padding-top: 0;
+}
+
+.org li {
+  list-style: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 5px 0;
+}
+
+/* Lineas horizontales y verticales que unen cada caja con su caja madre */
+.org li::before,
+.org li::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 50%;
+  width: 50%;
+  height: 20px;
+  border-top: 2px solid var(--border);
+}
+
+.org li::after {
+  right: auto;
+  left: 50%;
+  border-left: 2px solid var(--border);
+}
+
+.org li:only-child::before,
+.org li:only-child::after {
+  display: none;
+}
+
+.org li:only-child {
+  padding-top: 0;
+}
+
+.org li:first-child::before,
+.org li:last-child::after {
+  border: 0 none;
+}
+
+.org li:last-child::before {
+  border-right: 2px solid var(--border);
+  border-radius: 0 6px 0 0;
+}
+
+.org li:first-child::after {
+  border-radius: 6px 0 0 0;
+}
+
+.org ul ul::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 20px;
+  border-left: 2px solid var(--border);
+}
+
+.org-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--muted);
+  border-radius: 8px;
+  padding: 8px 10px;
+  width: 150px;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+
+.org-box:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+
+.org-box.selected {
+  outline: 2px solid var(--accent);
+}
+
+.org-box.tone-ok { border-top-color: var(--ok); }
+.org-box.tone-warn { border-top-color: var(--pending); }
+.org-box.tone-bad { border-top-color: var(--fail); }
+.org-box.tone-neutral { border-top-color: var(--accent); }
+
+.org-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.org-count {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: 2px 0;
+}
+
+.org-pct {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.org-line {
+  font-size: 0.72rem;
+  margin-top: 4px;
+}
+
+.tree-detail {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.tree-detail-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
