@@ -8,7 +8,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Visibilidad de rutas SimpliRoute</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚚</text></svg>" />
-  <link rel="stylesheet" href="style.css?v=c5fb54ff8a" />
+  <link rel="stylesheet" href="style.css?v=738858b347" />
 </head>
 <body>
   <!--
@@ -47,6 +47,7 @@
 
   <div class="tabs" role="tablist">
     <button type="button" class="tab active" id="tab-btn-rutas" data-tab="rutas" role="tab" aria-selected="true">Rutas en vivo</button>
+    <button type="button" class="tab" id="tab-btn-vista1" data-tab="vista1" role="tab" aria-selected="false">Vista 1</button>
     <button type="button" class="tab" id="tab-btn-analisis" data-tab="analisis" role="tab" aria-selected="false">Análisis</button>
     <button type="button" class="tab" id="tab-btn-duracion" data-tab="duracion" role="tab" aria-selected="false">Duración de visitas</button>
     <button type="button" class="tab" id="tab-btn-sabana" data-tab="sabana" role="tab" aria-selected="false">Sábana (CSV)</button>
@@ -88,6 +89,18 @@
     <div id="cargo-summary"></div>
     <div id="summary-line"></div>
     <div id="results"></div>
+  </section>
+
+  <section id="tab-vista1" class="tab-panel" hidden>
+    <div class="toolbar">
+      <div class="toolbar-row filters-row">
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="vista1-search" list="seller-list" placeholder="Filtrar por seller..." />
+        </div>
+      </div>
+    </div>
+    <div id="vista1-results"></div>
   </section>
 
   <section id="tab-analisis" class="tab-panel" hidden>
@@ -150,7 +163,7 @@
 
   
 
-  <script src="app.js?v=7bedd2c4eb"></script>
+  <script src="app.js?v=365c6b2734"></script>
   <script src="viewer.js?v=fb17a79ec4"></script>
 </body>
 </html>
