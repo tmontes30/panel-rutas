@@ -19,6 +19,11 @@ const cargoSummaryEl = document.getElementById("cargo-summary");
 const resultsEl = document.getElementById("results");
 const vista1SearchInput = document.getElementById("vista1-search");
 const vista1ResultsEl = document.getElementById("vista1-results");
+const cumplSearchInput = document.getElementById("cumpl-search");
+const cumplFilterEl = document.getElementById("cumpl-filter");
+const cumplSortEl = document.getElementById("cumpl-sort");
+const cumplResultsEl = document.getElementById("cumpl-results");
+const downloadCumplCsvBtn = document.getElementById("download-cumpl-csv");
 const analysisSearchInput = document.getElementById("analysis-search");
 const analysisResultsEl = document.getElementById("analysis-results");
 const durationSearchInput = document.getElementById("duration-search");
@@ -1051,6 +1056,157 @@ function renderVista1() {
   });
 }
 
+// ---------- Pestaña % Cumplimiento (retirado real vs pactado, por seller) ----------
+
+let cumplMaxPct = "all";
+let cumplSortMode = "pct-asc";
+
+// Agrupa por seller las visitas ya cerradas que tenian pedidos (Carga 2 > 0).
+// Las pendientes no entran: todavia no se sabe cuanto se va a retirar.
+function getCumplimientoRows() {
+  const data = getWorkingData();
+  if (!data) return [];
+  const query = cumplSearchInput.value.trim().toLowerCase();
+
+  const bySeller = new Map();
+  for (const s of flattenAllStops(data)) {
+    const st = (s.status || "").toLowerCase();
+    if (!["completed", "failed", "skipped"].includes(st)) continue;
+    const pactado = toNumber(s.load_2);
+    if (pactado <= 0) continue;
+    const name = s.seller_name || "(sin nombre)";
+    if (query && !name.toLowerCase().includes(query)) continue;
+    if (!bySeller.has(name)) {
+      bySeller.set(name, { seller_name: name, seller_id: s.seller_id, seller_id_exact: s.seller_id_exact, visits: 0, failed: 0, pactado: 0, retirado: 0, vehicles: new Set() });
+    }
+    const row = bySeller.get(name);
+    row.visits += 1;
+    if (st !== "completed") row.failed += 1;
+    row.pactado += pactado;
+    row.retirado += toNumber(s.bultos_retirados);
+    if (s.vehicle_name) row.vehicles.add(s.vehicle_name);
+  }
+
+  let rows = [...bySeller.values()].map((r) => ({
+    ...r,
+    vehicles: [...r.vehicles].join(", "),
+    pct: (r.retirado / r.pactado) * 100,
+    missing: Math.max(r.pactado - r.retirado, 0),
+  }));
+  if (cumplMaxPct !== "all") {
+    const max = Number(cumplMaxPct);
+    rows = rows.filter((r) => (max === 0 ? r.retirado === 0 : r.pct < max));
+  }
+  if (cumplSortMode === "missing-desc") {
+    rows.sort((a, b) => b.missing - a.missing || a.pct - b.pct);
+  } else {
+    rows.sort((a, b) => a.pct - b.pct || b.pactado - a.pactado);
+  }
+  return rows;
+}
+
+function cumplTone(pct) {
+  if (pct < 50) return "bad";
+  if (pct < 80) return "warn";
+  return "ok";
+}
+
+function renderCumplimiento() {
+  cumplResultsEl.innerHTML = "";
+  if (!getWorkingData()) return;
+  const rows = getCumplimientoRows();
+
+  const pactado = rows.reduce((sum, r) => sum + r.pactado, 0);
+  const retirado = rows.reduce((sum, r) => sum + r.retirado, 0);
+  const globalPct = pactado ? Math.round((retirado / pactado) * 100) : null;
+  const critical = rows.filter((r) => r.pct < 80).length;
+  const missing = rows.reduce((sum, r) => sum + r.missing, 0);
+
+  const summary = document.createElement("div");
+  summary.className = "summary-strip";
+  summary.innerHTML = `
+    <div class="summary-tile ${globalPct !== null && globalPct < 80 ? "sev-warning" : "sev-ok"}"><div class="value">${globalPct === null ? "-" : globalPct + "%"}</div><div class="label">Cumplimiento (retirado ÷ pactado)</div></div>
+    <div class="summary-tile"><div class="value">${rows.length}</div><div class="label">Sellers en la lista</div></div>
+    <div class="summary-tile ${critical ? "sev-critical" : "sev-ok"}"><div class="value">${critical}</div><div class="label">Sellers bajo 80%</div></div>
+    <div class="summary-tile ${missing ? "sev-warning" : "sev-ok"}"><div class="value">${formatQty(missing)}</div><div class="label">Bultos que faltaron</div></div>
+  `;
+  cumplResultsEl.appendChild(summary);
+
+  const note = document.createElement("p");
+  note.className = "insight-desc";
+  note.textContent =
+    "Solo visitas terminadas (completadas, fallidas o salteadas) que tenían pedidos. % = bultos retirados ÷ pedidos pactados (Carga 2), sumando todas las visitas del día de cada seller.";
+  cumplResultsEl.appendChild(note);
+
+  if (rows.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No hay sellers que cumplan con el filtro.";
+    cumplResultsEl.appendChild(empty);
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.innerHTML = `
+    <thead><tr>
+      <th>#</th><th>Seller</th><th>Seller ID</th><th>Vehículo(s)</th><th>Visitas</th>
+      <th>Pactado</th><th>Retirado</th><th>Faltó</th><th>% cumplimiento</th>
+    </tr></thead>
+    <tbody>${rows
+      .map((r, i) => {
+        const tone = cumplTone(r.pct);
+        const barWidth = Math.min(r.pct, 100);
+        const failedNote = r.failed ? `<div class="note">${r.failed} visita(s) fallida(s)/salteada(s)</div>` : "";
+        return `<tr>
+          <td>${i + 1}</td>
+          <td>${esc(r.seller_name)}${failedNote}</td>
+          <td>${sellerIdLabel(r)}</td>
+          <td>${esc(r.vehicles || "-")}</td>
+          <td>${r.visits}</td>
+          <td>${formatQty(r.pactado)}</td>
+          <td>${formatQty(r.retirado)}</td>
+          <td>${r.missing ? formatQty(r.missing) : "-"}</td>
+          <td><div class="cumpl-cell">
+            <div class="cumpl-bar"><div class="cumpl-fill tone-${tone}" style="width:${barWidth}%"></div></div>
+            <span class="cumpl-pct tone-${tone}">${Math.round(r.pct)}%</span>
+          </div></td>
+        </tr>`;
+      })
+      .join("")}</tbody>
+  `;
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll";
+  scroll.appendChild(table);
+  cumplResultsEl.appendChild(scroll);
+}
+
+function downloadCumplimientoCsv() {
+  const rows = getCumplimientoRows();
+  if (rows.length === 0) return;
+  const columns = [
+    ["Seller", (r) => r.seller_name],
+    ["Seller ID", (r) => sellerIdLabelPlain(r)],
+    ["Vehículo(s)", (r) => r.vehicles],
+    ["Visitas", (r) => r.visits],
+    ["Visitas fallidas/salteadas", (r) => r.failed],
+    ["Pactado (Carga 2)", (r) => r.pactado],
+    ["Retirado", (r) => r.retirado],
+    ["Faltó", (r) => r.missing],
+    ["% cumplimiento", (r) => Math.round(r.pct)],
+  ];
+  const lines = [columns.map(([h]) => csvEscape(h)).join(",")];
+  for (const row of rows) lines.push(columns.map(([, get]) => csvEscape(get(row))).join(","));
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `simpliroute_cumplimiento_${lastData.date}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ---------- Pestaña Duración de visitas ----------
 
 function renderDurations() {
@@ -1448,6 +1604,7 @@ function switchTab(tabName) {
     panel.hidden = name !== tabName;
   }
   if (tabName === "vista1") renderVista1();
+  if (tabName === "cumplimiento") renderCumplimiento();
   if (tabName === "analisis") renderAnalysis();
   if (tabName === "duracion") renderDurations();
   if (tabName === "sabana") renderSabana();
@@ -1460,6 +1617,7 @@ function renderAllTabs() {
   if (data) populateSellerDatalist(data);
   render();
   renderVista1();
+  renderCumplimiento();
   renderAnalysis();
   renderDurations();
   renderSabana();
@@ -1690,6 +1848,23 @@ for (const btn of tabButtons) {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 }
 vista1SearchInput.addEventListener("input", renderVista1);
+
+cumplSearchInput.addEventListener("input", renderCumplimiento);
+downloadCumplCsvBtn.addEventListener("click", downloadCumplimientoCsv);
+cumplFilterEl.addEventListener("click", (e) => {
+  const btn = e.target.closest(".segment");
+  if (!btn) return;
+  cumplMaxPct = btn.dataset.max;
+  cumplFilterEl.querySelectorAll(".segment").forEach((s) => s.classList.toggle("active", s === btn));
+  renderCumplimiento();
+});
+cumplSortEl.addEventListener("click", (e) => {
+  const btn = e.target.closest(".segment");
+  if (!btn) return;
+  cumplSortMode = btn.dataset.sort;
+  cumplSortEl.querySelectorAll(".segment").forEach((s) => s.classList.toggle("active", s === btn));
+  renderCumplimiento();
+});
 analysisSearchInput.addEventListener("input", renderAnalysis);
 
 durationSearchInput.addEventListener("input", renderDurations);
