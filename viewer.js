@@ -27,6 +27,39 @@
   let currentPublishedAt = null;
   let pollTimer = null;
 
+  // Medición de uso (Google Analytics 4) sin cargar scripts de terceros: se
+  // manda solo el nombre del evento y el usuario que entró, nunca datos del
+  // panel. connect-src de VIEWER_CSP (publish.py) permite solo este destino.
+  const GA_ID = "G-XXXXXXXXXX";
+  function track(name, params = {}) {
+    if (GA_ID === "G-XXXXXXXXXX" || location.protocol !== "https:" || !navigator.sendBeacon) return;
+    const flags = {};
+    let cid, sid;
+    try {
+      cid = localStorage.getItem("sr_ga_cid");
+      if (!cid) {
+        cid = `${Math.floor(Math.random() * 2147483647)}.${Math.floor(Date.now() / 1000)}`;
+        localStorage.setItem("sr_ga_cid", cid);
+        flags._fv = "1";
+      }
+      sid = sessionStorage.getItem("sr_ga_sid");
+      if (!sid) {
+        sid = String(Math.floor(Date.now() / 1000));
+        sessionStorage.setItem("sr_ga_sid", sid);
+        flags._ss = "1";
+      }
+    } catch {
+      return;
+    }
+    const q = new URLSearchParams({
+      v: "2", tid: GA_ID, cid, sid, sct: "1", seg: "1", _et: "1", en: name,
+      dl: location.origin + location.pathname, dt: document.title, "ep.app_name": "panel-rutas", ...flags,
+    });
+    for (const [k, v] of Object.entries(params)) q.set(`ep.${k}`, v);
+    navigator.sendBeacon(`https://region1.google-analytics.com/g/collect?${q}`);
+  }
+  track("page_view");
+
   const b64ToBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const bytesToB64 = (bytes) => btoa(String.fromCharCode(...bytes));
   const toHex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -139,6 +172,7 @@
     session = { uid, kek: bytesToB64(kekBytes) };
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
     showDashboard(decrypted, payload.published_at);
+    track("viewer_login", { viewer: username.trim().toLowerCase() });
   }
 
   async function restoreSession() {
