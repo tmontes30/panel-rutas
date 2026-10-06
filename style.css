@@ -450,7 +450,7 @@ html[data-mode="viewer"] body:not(.unlocked) > :not(#login-overlay) {
 
 .reason-row {
   display: grid;
-  grid-template-columns: 220px 1fr 50px;
+  grid-template-columns: 220px 1fr 140px;
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
@@ -677,6 +677,12 @@ tr.current-stop td:nth-child(2) {
   color: var(--muted);
   font-style: italic;
   padding: 20px 0;
+}
+
+/* Fila de total al pie de una tabla */
+tr.total-row td {
+  font-weight: 700;
+  border-top: 2px solid var(--border);
 }
 
 /* Avance: horas con visitas atrasadas */
