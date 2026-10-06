@@ -19,6 +19,8 @@ const cargoSummaryEl = document.getElementById("cargo-summary");
 const resultsEl = document.getElementById("results");
 const vista1SearchInput = document.getElementById("vista1-search");
 const vista1ResultsEl = document.getElementById("vista1-results");
+const avanceSearchInput = document.getElementById("avance-search");
+const avanceResultsEl = document.getElementById("avance-results");
 const cumplSearchInput = document.getElementById("cumpl-search");
 const cumplFilterEl = document.getElementById("cumpl-filter");
 const cumplSortEl = document.getElementById("cumpl-sort");
@@ -65,6 +67,13 @@ function isDescargaStop(stop) {
   // "Descarga" queda en el medio (devoluciones al CD), ademas de las simples
   // "Descarga - 7100". Buscamos la palabra en cualquier parte del nombre.
   return (stop.seller_name || "").toLowerCase().includes("descarga");
+}
+
+// Bultos retirados que cuentan para los totales. En las paradas "Descarga"
+// el chofer anota en cajas_retiradas lo que DESCARGA en el CD (lo mismo que ya
+// retiro en los sellers), asi que sumarlas contaria todo dos veces.
+function pickedUpQty(stop) {
+  return isDescargaStop(stop) ? 0 : toNumber(stop.bultos_retirados);
 }
 
 // "FBS" es uno de los varios "programas" de retiro (los otros son SOD VEV y
@@ -393,7 +402,7 @@ function render() {
     ordersShown += allVisibleStops.reduce((sum, s) => sum + toNumber(s.load_2), 0);
     retrievedShown += allVisibleStops
       .filter((s) => (s.status || "").toLowerCase() === "completed")
-      .reduce((sum, s) => sum + toNumber(s.bultos_retirados), 0);
+      .reduce((sum, s) => sum + pickedUpQty(s), 0);
 
     vehicleBlocks.push({
       vehicle_name: vehicle.vehicle_name,
@@ -754,7 +763,7 @@ function classifyVista1Stop(stop, planDate, now) {
   const row = {
     ...stop,
     pactado: toNumber(stop.load_2),
-    retirado: toNumber(stop.bultos_retirados),
+    retirado: pickedUpQty(stop),
     dwellMin: checkin && checkout ? (checkout - checkin) / 60000 : null,
     windowClass: null, // "cumplido" | "tarde" | "temprano" | "no_pasa" | "en_curso" | "sin_ventana"
     gapMin: null,
@@ -1056,6 +1065,190 @@ function renderVista1() {
   });
 }
 
+// ---------- Pestaña Avance (cantidades del dia y atrasos) ----------
+
+function renderAvance() {
+  avanceResultsEl.innerHTML = "";
+  const data = getWorkingData();
+  if (!data) return;
+
+  const query = avanceSearchInput.value.trim().toLowerCase();
+  // Las Descarga (vuelta al CD) no son retiros: aca se sacan siempre, este
+  // prendido o no el filtro global, para no inflar atrasos ni bultos.
+  let stops = flattenAllStops(data).filter((s) => !isDescargaStop(s));
+  if (query) stops = stops.filter((s) => (s.seller_name || "").toLowerCase().includes(query));
+
+  const now = new Date();
+  const rows = stops.map((s) => {
+    const st = (s.status || "pending").toLowerCase();
+    const we = parseLocalDateTime(data.date, s.window_end);
+    const eta = s.current_eta ? new Date(s.current_eta) : null;
+    const isPending = st === "pending";
+    return {
+      ...s,
+      st,
+      pactado: toNumber(s.load_2),
+      retirado: pickedUpQty(s),
+      isPending,
+      isClosedBad: st === "failed" || st === "skipped",
+      // Atrasada = sigue pendiente y la ventana ya cerro; en riesgo = todavia
+      // en ventana pero el ETA en vivo cae despues del cierre.
+      overdue: isPending && we && we < now,
+      atRisk: isPending && we && we >= now && eta && !Number.isNaN(eta.getTime()) && eta > we,
+      overdueMin: isPending && we && we < now ? (now - we) / 60000 : null,
+    };
+  });
+
+  const sum = (list, field) => list.reduce((acc, r) => acc + r[field], 0);
+  const completed = rows.filter((r) => r.st === "completed");
+  const bad = rows.filter((r) => r.isClosedBad);
+  const pending = rows.filter((r) => r.isPending);
+  const overdue = pending.filter((r) => r.overdue);
+  const atRisk = pending.filter((r) => r.atRisk);
+
+  const totalPactado = sum(rows, "pactado");
+  const retirado = sum(rows, "retirado");
+  const pendientePactado = sum(pending, "pactado");
+  const perdidoFallidas = sum(bad, "pactado") - sum(bad, "retirado");
+  // Retiros en visitas sin pedido cargado (Carga 2 vacia): son reales, pero no
+  // sirven para medir el ritmo contra lo pactado.
+  const extraRetirado = rows.filter((r) => r.pactado <= 0).reduce((acc, r) => acc + r.retirado, 0);
+  const closedWithOrders = [...completed, ...bad].filter((r) => r.pactado > 0);
+  const closedPactado = sum(closedWithOrders, "pactado");
+  const closedRetirado = sum(closedWithOrders, "retirado");
+  // Ritmo real del dia: de lo pactado en visitas ya cerradas, cuanto se retiro.
+  const rate = closedPactado ? closedRetirado / closedPactado : null;
+  const projectedFinal = rate === null ? null : Math.round(retirado + pendientePactado * rate);
+
+  const pct = (part) => (totalPactado ? Math.max(0, Math.min(100, (part / totalPactado) * 100)) : 0);
+  const pctText = (part, total) => (total ? `${Math.round((part / total) * 100)}%` : "-");
+
+  // Barra principal: retirado (verde) + perdido en fallidas (rojo) + pendiente (gris).
+  const progress = document.createElement("div");
+  progress.className = "progress-section";
+  progress.innerHTML = `
+    <div class="progress-header">
+      <span class="title">Avance de bultos del día</span>
+      <span class="value"><strong>${formatQty(retirado)}</strong> retirados de ${formatQty(totalPactado)} pactados (${pctText(retirado, totalPactado)})</span>
+    </div>
+    <div class="progress-bar">
+      <div class="progress-segment completed" style="width:${pct(retirado)}%"></div>
+      <div class="progress-segment failed" style="width:${pct(Math.max(perdidoFallidas, 0))}%"></div>
+    </div>
+    <div class="progress-legend">
+      <span class="lg-completed">${formatQty(retirado)} retirados</span>
+      <span class="lg-failed">${formatQty(Math.max(perdidoFallidas, 0))} perdidos en fallidas/salteadas</span>
+      <span class="lg-pending">${formatQty(pendientePactado)} por retirar</span>
+    </div>
+  `;
+  avanceResultsEl.appendChild(progress);
+
+  const tiles = document.createElement("div");
+  tiles.className = "summary-strip";
+  tiles.innerHTML = `
+    <div class="summary-tile"><div class="value">${formatQty(totalPactado)}</div><div class="label">Bultos pactados (Carga 2)</div></div>
+    <div class="summary-tile sev-ok" title="Incluye ${formatQty(extraRetirado)} bultos de visitas sin pedido cargado. No incluye paradas Descarga (CD)."><div class="value">${formatQty(retirado)}</div><div class="label">Retirados${extraRetirado ? ` (${formatQty(extraRetirado)} sin pedido cargado)` : ""}</div></div>
+    <div class="summary-tile"><div class="value">${formatQty(pendientePactado)}</div><div class="label">Por retirar (${pending.length} visitas)</div></div>
+    <div class="summary-tile ${bad.length ? "sev-critical" : "sev-ok"}"><div class="value">${bad.length}</div><div class="label">Visitas fallidas/salteadas</div></div>
+    <div class="summary-tile ${overdue.length ? "sev-critical" : "sev-ok"}"><div class="value">${overdue.length}</div><div class="label">Atrasadas (${formatQty(sum(overdue, "pactado"))} bultos)</div></div>
+    <div class="summary-tile ${atRisk.length ? "sev-warning" : "sev-ok"}"><div class="value">${atRisk.length}</div><div class="label">En riesgo de atraso (${formatQty(sum(atRisk, "pactado"))} bultos)</div></div>
+  `;
+  avanceResultsEl.appendChild(tiles);
+
+  // Proyeccion simple: lo que falta se retira al mismo ritmo que lo ya cerrado.
+  const projection = document.createElement("div");
+  projection.className = "insight-card sev-info";
+  projection.innerHTML =
+    projectedFinal === null
+      ? `<div class="insight-header"><h3>🔮 Proyección de cierre del día</h3></div><p class="insight-desc">Todavía no hay visitas cerradas para calcular el ritmo.</p>`
+      : `<div class="insight-header"><h3>🔮 Proyección de cierre del día</h3></div>
+         <p class="insight-desc">Si lo que falta se retira al mismo ritmo que lo ya cerrado hoy (${Math.round(rate * 100)}% de lo pactado), el día cerraría con
+         <strong>${formatQty(projectedFinal)}</strong> bultos retirados de ${formatQty(totalPactado)} (${pctText(projectedFinal, totalPactado)}),
+         es decir, quedarían <strong>${formatQty(Math.max(totalPactado - projectedFinal, 0))}</strong> bultos sin retirar.
+         Ya hay ${overdue.length} visita(s) atrasada(s) con ${formatQty(sum(overdue, "pactado"))} bultos y ${atRisk.length} más en riesgo según el ETA en vivo.</p>`;
+  avanceResultsEl.appendChild(projection);
+
+  // Avance por hora de inicio de ventana: muestra donde se esta acumulando el atraso.
+  const byHour = new Map();
+  for (const r of rows) {
+    const hour = r.window_start ? r.window_start.slice(0, 2) + ":00" : "Sin ventana";
+    if (!byHour.has(hour)) byHour.set(hour, []);
+    byHour.get(hour).push(r);
+  }
+  const hourRows = [...byHour.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const hourCard = document.createElement("div");
+  hourCard.className = "insight-card sev-info";
+  hourCard.innerHTML = `
+    <div class="insight-header"><h3>🕒 Avance por hora de ventana</h3></div>
+    <p class="insight-desc">Visitas agrupadas por la hora en que abre su ventana. "Atrasadas" = siguen pendientes y su ventana ya cerró.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Ventana desde</th><th>Visitas</th><th>Hechas</th><th>Fallidas</th><th>Pendientes</th><th>Atrasadas</th><th>Pactado</th><th>Retirado</th><th>Por retirar</th><th>Avance</th></tr></thead>
+      <tbody>${hourRows
+        .map(([hour, list]) => {
+          const p = sum(list, "pactado");
+          const ret = sum(list, "retirado");
+          const pend = list.filter((r) => r.isPending);
+          const late = pend.filter((r) => r.overdue).length;
+          return `<tr${late ? ' class="row-late"' : ""}>
+            <td>${esc(hour)}</td>
+            <td>${list.length}</td>
+            <td>${list.filter((r) => r.st === "completed").length}</td>
+            <td>${list.filter((r) => r.isClosedBad).length || "-"}</td>
+            <td>${pend.length || "-"}</td>
+            <td>${late ? `<strong class="dif-neg">${late}</strong>` : "-"}</td>
+            <td>${formatQty(p)}</td>
+            <td>${formatQty(ret)}</td>
+            <td>${formatQty(sum(pend, "pactado")) }</td>
+            <td>${pctText(ret, p)}</td>
+          </tr>`;
+        })
+        .join("")}</tbody>
+    </table></div>
+  `;
+  avanceResultsEl.appendChild(hourCard);
+
+  const vehicleCol = { label: "Vehículo / Chofer", render: (r) => `${esc(r.vehicle_name || "-")}<br><span style="color:var(--muted);font-size:0.75rem">${esc(r.driver_name || "-")}</span>` };
+  const sellerCol = { label: "Seller", render: (r) => esc(r.seller_name || "(sin nombre)") };
+  const sellerIdCol = { label: "Seller ID", render: (r) => sellerIdLabel(r) };
+  const windowCol = { label: "Ventana", render: (r) => formatWindow(r) };
+  const pactadoCol = { label: "Bultos pactados", render: (r) => formatQty(r.pactado) };
+  const byPactado = (a, b) => b.pactado - a.pactado;
+
+  renderInsightCard(avanceResultsEl, {
+    severity: "critical",
+    title: "🔴 Atrasadas: ventana cerrada y siguen pendientes",
+    description: "Ordenadas por bultos pactados: arriba lo que más pesa en el atraso del día.",
+    rows: [...overdue].sort(byPactado),
+    emptyText: "Ninguna, por ahora.",
+    columns: [sellerCol, sellerIdCol, vehicleCol, windowCol, { label: "Atrasada hace", render: (r) => formatMinutes(r.overdueMin) }, { label: "Camión", render: (r) => (r.on_its_way ? "En camino" : "Sin camión en camino") }, pactadoCol],
+  });
+
+  renderInsightCard(avanceResultsEl, {
+    severity: "warning",
+    title: "🟠 En riesgo: el ETA en vivo cae después de la ventana",
+    description: "Todavía están dentro de la ventana, pero según SimpliRoute el camión va a llegar tarde.",
+    rows: [...atRisk].sort(byPactado),
+    emptyText: "Ninguna, por ahora.",
+    columns: [sellerCol, sellerIdCol, vehicleCol, windowCol, { label: "ETA en vivo", render: (r) => formatEta(r.current_eta) }, pactadoCol],
+  });
+
+  renderInsightCard(avanceResultsEl, {
+    severity: "critical",
+    title: "⚫ Nos fallaron: visitas fallidas o salteadas",
+    description: "Con el motivo que dejó el chofer y lo que se dejó de retirar.",
+    rows: [...bad].sort(byPactado),
+    emptyText: "Ninguna.",
+    columns: [
+      sellerCol,
+      sellerIdCol,
+      vehicleCol,
+      { label: "Motivo", render: (r) => esc(r.motivo_fallido || r.checkout_comment || "(sin motivo)") },
+      pactadoCol,
+      { label: "No retirado", render: (r) => formatQty(Math.max(r.pactado - r.retirado, 0)) },
+    ],
+  });
+}
+
 // ---------- Pestaña % Cumplimiento (retirado real vs pactado, por seller) ----------
 
 let cumplMaxPct = "all";
@@ -1083,7 +1276,7 @@ function getCumplimientoRows() {
     row.visits += 1;
     if (st !== "completed") row.failed += 1;
     row.pactado += pactado;
-    row.retirado += toNumber(s.bultos_retirados);
+    row.retirado += pickedUpQty(s);
     if (s.vehicle_name) row.vehicles.add(s.vehicle_name);
   }
 
@@ -1603,6 +1796,7 @@ function switchTab(tabName) {
   for (const [name, panel] of Object.entries(tabPanels)) {
     panel.hidden = name !== tabName;
   }
+  if (tabName === "avance") renderAvance();
   if (tabName === "vista1") renderVista1();
   if (tabName === "cumplimiento") renderCumplimiento();
   if (tabName === "analisis") renderAnalysis();
@@ -1616,6 +1810,7 @@ function renderAllTabs() {
   const data = getWorkingData();
   if (data) populateSellerDatalist(data);
   render();
+  renderAvance();
   renderVista1();
   renderCumplimiento();
   renderAnalysis();
@@ -1847,6 +2042,7 @@ sortEl.addEventListener("click", (e) => {
 for (const btn of tabButtons) {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 }
+avanceSearchInput.addEventListener("input", renderAvance);
 vista1SearchInput.addEventListener("input", renderVista1);
 
 cumplSearchInput.addEventListener("input", renderCumplimiento);
