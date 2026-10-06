@@ -141,7 +141,14 @@
     errorEl,
     submitBtn,
   ]);
-  const overlay = el("div", { id: "login-overlay" }, [form]);
+  // Al recargar con sesion activa se muestra un spinner en vez del formulario
+  // mientras se descifra; si la sesion ya no sirve, aparece el login.
+  const loader = el("div", { className: "login-loading" }, [
+    el("div", { className: "spinner" }),
+    el("p", { textContent: "Cargando datos..." }),
+  ]);
+  const overlay = el("div", { id: "login-overlay" }, [form, loader]);
+  overlay.classList.toggle("restoring", !!sessionStorage.getItem(SESSION_KEY));
   document.body.prepend(overlay);
 
   const logoutBtn = el("button", { type: "button", className: "logout-btn", textContent: "Cerrar sesión" });
@@ -205,6 +212,7 @@
       if (err.message === "RELOADING") return;
       session = null;
       sessionStorage.removeItem(SESSION_KEY);
+      overlay.classList.remove("restoring");
     }
   }
 
