@@ -205,9 +205,6 @@ function isLiveEta(stop) {
   return status === "pending" && !!stop.on_its_way && !stop.checkin_time;
 }
 
-function pendingBeforeIn(stops, index) {
-  return stops.slice(0, index).filter((s) => (s.status || "pending").toLowerCase() === "pending").length;
-}
 
 function sortStops(stops, sortMode) {
   const withIndex = stops.map((s, i) => ({ s, i }));
@@ -271,7 +268,8 @@ function renderRouteTable(stops, query) {
         <th>Cerrada a las</th>
         <th>Carga 2</th>
         <th>Retirado (bultos)</th>
-        <th>Faltan antes</th>
+        <th title="Carga 2 − retirado. Positivo = quedó por retirar; negativo = se retiró de más.">Diferencia</th>
+        <th title="Retirado ÷ Carga 2">% retirado</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -288,6 +286,19 @@ function renderRouteTable(stops, query) {
     const note = statusKey === "failed" && stop.checkout_comment ? `<div class="note">${esc(stop.checkout_comment)}</div>` : "";
     const closedAt = statusKey === "completed" || statusKey === "failed" ? formatEta(stop.checkout_time) : "-";
 
+    // Diferencia y % solo cuando la visita ya cerro: si sigue pendiente,
+    // "retirado" todavia no existe y saldria todo como faltante.
+    let difCell = "-";
+    let pctCell = "-";
+    const pactado = toNumber(stop.load_2);
+    if (["completed", "failed", "skipped"].includes(statusKey) && pactado > 0 && !isDescargaStop(stop)) {
+      const retirado = toNumber(stop.bultos_retirados);
+      const dif = pactado - retirado;
+      difCell = `<span class="${dif > 0 ? "dif-neg" : dif < 0 ? "dif-pos" : ""}">${formatQty(dif)}</span>`;
+      const pct = (retirado / pactado) * 100;
+      pctCell = `<span class="cumpl-pct tone-${cumplTone(pct)}">${Math.round(pct)}%</span>`;
+    }
+
     tr.innerHTML = `
       <td>${esc(stop.order ?? "-")}</td>
       <td>${esc(stop.seller_name || "(sin nombre)")}${isLiveEta(stop) ? " 🚚" : ""}</td>
@@ -299,7 +310,8 @@ function renderRouteTable(stops, query) {
       <td>${closedAt}</td>
       <td>${esc(stop.load_2 ?? "-")}</td>
       <td>${esc(stop.bultos_retirados ?? "-")}</td>
-      <td>${esc(stop.pending_before)}</td>
+      <td>${difCell}</td>
+      <td>${pctCell}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -368,10 +380,7 @@ function render() {
     const routeBlocks = [];
 
     for (const route of vehicle.routes || []) {
-      const stopsWithFlags = (route.stops || []).map((stop, idx) => ({
-        ...stop,
-        pending_before: pendingBeforeIn(route.stops, idx),
-      }));
+      const stopsWithFlags = route.stops || [];
 
       // El filtro de estado siempre se aplica. El filtro "en vivo" ademas
       // achica la lista a solo las paradas con el camion en camino ahora
