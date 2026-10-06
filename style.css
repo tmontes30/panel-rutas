@@ -649,6 +649,13 @@ tr.current-stop td:nth-child(2) {
   padding: 20px 0;
 }
 
+/* Avance: horas con visitas atrasadas */
+tr.row-late {
+  background: rgba(224, 95, 95, 0.08);
+}
+
+.dif-neg { color: var(--fail); }
+
 /* % Cumplimiento: barra por seller */
 #download-cumpl-csv {
   margin-left: auto;
