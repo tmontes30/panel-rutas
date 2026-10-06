@@ -691,6 +691,7 @@ tr.row-late {
 }
 
 .dif-neg { color: var(--fail); }
+.dif-pos { color: var(--ok); }
 
 /* % Cumplimiento: barra por seller */
 #download-cumpl-csv {
