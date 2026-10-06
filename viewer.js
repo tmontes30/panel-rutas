@@ -75,11 +75,30 @@
     return new Uint8Array(bits);
   }
 
+  // Version del codigo de esta pagina (publish.py la pone en un <meta>). Si
+  // data.enc.json trae otra, el navegador tiene el HTML viejo en cache (Pages
+  // lo guarda 10 min): se recarga con ?b=<version> para saltarse esa cache. La
+  // sesion vive en sessionStorage, asi que no se vuelve a pedir la clave.
+  const PAGE_BUILD = document.querySelector('meta[name="sr-build"]')?.content || null;
+  const BUILD_RELOAD_KEY = "sr_viewer_build_reload";
+
+  function reloadIfNewBuild(payload) {
+    if (!payload.build || !PAGE_BUILD || payload.build === PAGE_BUILD) return false;
+    // Un solo intento por version: si el CDN todavia sirve el HTML viejo, no
+    // se queda recargando en loop; se reintenta en la proxima publicacion.
+    if (sessionStorage.getItem(BUILD_RELOAD_KEY) === payload.build) return false;
+    sessionStorage.setItem(BUILD_RELOAD_KEY, payload.build);
+    location.replace(`${location.pathname}?b=${encodeURIComponent(payload.build)}`);
+    return true;
+  }
+
   async function fetchPayload() {
     const resp = await fetch(`${DATA_URL}?t=${Date.now()}`, { cache: "no-store" });
     if (resp.status === 404) throw new Error("NOT_PUBLISHED");
     if (!resp.ok) throw new Error("FETCH_FAILED");
-    return resp.json();
+    const payload = await resp.json();
+    if (reloadIfNewBuild(payload)) throw new Error("RELOADING");
+    return payload;
   }
 
   async function decryptWith(payload, uid, kekBytes) {
@@ -182,9 +201,21 @@
       session = JSON.parse(raw);
       const payload = await fetchPayload();
       showDashboard(await decryptWith(payload, session.uid, b64ToBytes(session.kek)), payload.published_at);
-    } catch {
+    } catch (err) {
+      if (err.message === "RELOADING") return;
       session = null;
       sessionStorage.removeItem(SESSION_KEY);
+    }
+  }
+
+  // Sin sesion: igual se revisa la version al abrir, para que el login ya
+  // aparezca sobre el codigo nuevo.
+  async function checkBuildOnOpen() {
+    if (sessionStorage.getItem(SESSION_KEY)) return restoreSession();
+    try {
+      await fetchPayload();
+    } catch {
+      // sin red o recargando: el login se encarga de mostrar el error
     }
   }
 
@@ -235,5 +266,5 @@
     if (document.visibilityState === "visible") checkForUpdate();
   });
 
-  restoreSession();
+  checkBuildOnOpen();
 })();
