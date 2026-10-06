@@ -1669,9 +1669,11 @@ function renderFailed() {
   // Agrupa por el motivo categorizado (dropdown que deja el chofer). Sirve
   // para ver rapido cuales son los motivos que mas se repiten.
   const counts = new Map();
+  const bultosByReason = new Map();
   for (const s of failedStops) {
     const key = reasonLabel(s);
     counts.set(key, (counts.get(key) || 0) + 1);
+    bultosByReason.set(key, (bultosByReason.get(key) || 0) + toNumber(s.load_2));
   }
   const sortedReasons = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   const maxCount = sortedReasons.length ? sortedReasons[0][1] : 1;
@@ -1695,7 +1697,7 @@ function renderFailed() {
     row.innerHTML = `
       <span class="reason-name" title="${esc(reason)}">${esc(reason)}</span>
       <span class="reason-bar-track"><span class="reason-bar-fill" style="width:${pct}%;background:${fillColor}"></span></span>
-      <span class="reason-count">${count}</span>
+      <span class="reason-count" title="Visitas fallidas · bultos que tenían que entregar">${count} · ${formatQty(bultosByReason.get(reason) || 0)} bultos</span>
     `;
     row.addEventListener("click", () => {
       selectedFailReason = selectedFailReason === reason ? null : reason;
@@ -1718,6 +1720,15 @@ function renderFailed() {
   failedGroupsEl.appendChild(groupCard);
 
   const visibleStops = getFailedRows();
+  const totalBultos = visibleStops.reduce((sum, s) => sum + toNumber(s.load_2), 0);
+
+  const summary = document.createElement("div");
+  summary.className = "summary-strip";
+  summary.innerHTML = `
+    <div class="summary-tile sev-critical"><div class="value">${visibleStops.length}</div><div class="label">Visitas fallidas${selectedFailReason ? " (motivo filtrado)" : ""}</div></div>
+    <div class="summary-tile sev-warning"><div class="value">${formatQty(totalBultos)}</div><div class="label">Bultos que tenían que entregar (Carga 2)</div></div>
+  `;
+  failedResultsEl.appendChild(summary);
 
   const table = document.createElement("table");
   table.innerHTML = `
@@ -1730,9 +1741,16 @@ function renderFailed() {
         <th>Marcada fallida</th>
         <th>Motivo</th>
         <th>Comentario del chofer</th>
+        <th>Bultos a entregar</th>
       </tr>
     </thead>
     <tbody></tbody>
+    <tfoot>
+      <tr class="total-row">
+        <td colspan="7">Total (${visibleStops.length} visitas)</td>
+        <td>${formatQty(totalBultos)}</td>
+      </tr>
+    </tfoot>
   `;
   const tbody = table.querySelector("tbody");
 
@@ -1746,6 +1764,7 @@ function renderFailed() {
       <td>${formatEta(s.checkout_time)}</td>
       <td>${esc(reasonLabel(s))}</td>
       <td>${esc(s.checkout_comment || "-")}</td>
+      <td>${s.load_2 == null || s.load_2 === "" ? "-" : formatQty(toNumber(s.load_2))}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -1765,6 +1784,7 @@ const FAILED_COLUMNS = [
   { header: "Marcada fallida (check-out)", get: (r) => formatDateTimeFull(r.checkout_time) },
   { header: "Motivo (categoría)", get: (r) => reasonLabel(r) },
   { header: "Comentario del chofer", get: (r) => r.checkout_comment || "" },
+  { header: "Bultos a entregar (Carga 2)", get: (r) => r.load_2 ?? "" },
 ];
 
 function downloadFailedCsv() {
