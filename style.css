@@ -679,6 +679,20 @@ tr.current-stop td:nth-child(2) {
   padding: 20px 0;
 }
 
+/* Avance: de dónde sale la diferencia pactado − retirado */
+.dif-breakdown {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 0.85rem;
+}
+
+.dif-breakdown ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+
 /* Fila de total al pie de una tabla */
 tr.total-row td {
   font-weight: 700;
