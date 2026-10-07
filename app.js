@@ -354,6 +354,7 @@ function renderCargoSummary(totalOrders, retrieved) {
   cargoSummaryEl.innerHTML = `
     <div class="summary-tile"><div class="value">${formatQty(totalOrders)}</div><div class="label">Pedidos${filtersActive ? " (según filtros)" : " del día"} (Carga 2)</div></div>
     <div class="summary-tile sev-ok"><div class="value">${formatQty(retrieved)}</div><div class="label">Retirados efectivamente${filtersActive ? " (filtro)" : ""}</div></div>
+    <div class="summary-tile ${totalOrders - retrieved > 0 ? "sev-critical" : "sev-ok"}" title="Pedidos (Carga 2) − retirados, sobre lo que muestran los filtros. Incluye lo que sigue pendiente."><div class="value">${formatQty(totalOrders - retrieved)}</div><div class="label">Diferencia (pedidos − retirados)</div></div>
     <div class="summary-tile ${pct !== null && pct < 80 ? "sev-warning" : "sev-ok"}"><div class="value">${pct === null ? "-" : pct + "%"}</div><div class="label">% recogido (por volumen)</div></div>
   `;
 }
@@ -408,10 +409,11 @@ function render() {
     pendingShown += allVisibleStops.filter((s) => (s.status || "pending").toLowerCase() === "pending").length;
     completedShown += allVisibleStops.filter((s) => (s.status || "").toLowerCase() === "completed").length;
     failedShown += allVisibleStops.filter((s) => (s.status || "").toLowerCase() === "failed").length;
-    ordersShown += allVisibleStops.reduce((sum, s) => sum + toNumber(s.load_2), 0);
-    retrievedShown += allVisibleStops
-      .filter((s) => (s.status || "").toLowerCase() === "completed")
-      .reduce((sum, s) => sum + pickedUpQty(s), 0);
+    // Las tarjetas de bultos suman solo las paradas del seller buscado (no
+    // toda la ruta que se muestra como contexto), asi la diferencia es la suya.
+    const cargoStops = query ? allVisibleStops.filter((s) => matchesSearch(s, query)) : allVisibleStops;
+    ordersShown += cargoStops.reduce((sum, s) => sum + toNumber(s.load_2), 0);
+    retrievedShown += cargoStops.reduce((sum, s) => sum + pickedUpQty(s), 0);
 
     vehicleBlocks.push({
       vehicle_name: vehicle.vehicle_name,
@@ -1119,6 +1121,11 @@ function renderAvance() {
   const retirado = sum(rows, "retirado");
   const pendientePactado = sum(pending, "pactado");
   const perdidoFallidas = sum(bad, "pactado") - sum(bad, "retirado");
+  // Diferencia del dia = pactado total - retirado total, y de donde sale.
+  // Las tres partes suman exactamente la diferencia.
+  const diferenciaDia = totalPactado - retirado;
+  const difPendientes = pendientePactado - sum(pending, "retirado");
+  const difCompletadas = sum(completed, "pactado") - sum(completed, "retirado");
   // Retiros en visitas sin pedido cargado (Carga 2 vacia): son reales, pero no
   // sirven para medir el ritmo contra lo pactado.
   const extraRetirado = rows.filter((r) => r.pactado <= 0).reduce((acc, r) => acc + r.retirado, 0);
@@ -1149,6 +1156,16 @@ function renderAvance() {
       <span class="lg-failed">${formatQty(Math.max(perdidoFallidas, 0))} perdidos en fallidas/salteadas</span>
       <span class="lg-pending">${formatQty(pendientePactado)} por retirar</span>
     </div>
+    <div class="dif-breakdown">
+      <strong>Diferencia del día: ${formatQty(totalPactado)} pactados − ${formatQty(retirado)} retirados = <span class="${diferenciaDia > 0 ? "dif-neg" : "dif-pos"}">${formatQty(diferenciaDia)}</span></strong>
+      <ul>
+        <li>${formatQty(perdidoFallidas)} en visitas fallidas/salteadas</li>
+        <li>${difCompletadas >= 0
+          ? `${formatQty(difCompletadas)} que faltaron en visitas completadas (se retiró menos de lo pactado)`
+          : `${formatQty(-difCompletadas)} retirados de más en visitas completadas (descuentan de la diferencia)`}</li>
+        <li>${formatQty(difPendientes)} en visitas que siguen pendientes</li>
+      </ul>
+    </div>
   `;
   avanceResultsEl.appendChild(progress);
 
@@ -1156,6 +1173,7 @@ function renderAvance() {
   tiles.className = "summary-strip";
   tiles.innerHTML = `
     <div class="summary-tile"><div class="value">${formatQty(totalPactado)}</div><div class="label">Bultos pactados (Carga 2)</div></div>
+    <div class="summary-tile ${diferenciaDia > 0 ? "sev-critical" : "sev-ok"}" title="Total pactado del día − total retirado"><div class="value">${formatQty(diferenciaDia)}</div><div class="label">Diferencia (pactado − retirado)</div></div>
     <div class="summary-tile sev-ok" title="Incluye ${formatQty(extraRetirado)} bultos de visitas sin pedido cargado. No incluye paradas Descarga (CD)."><div class="value">${formatQty(retirado)}</div><div class="label">Retirados${extraRetirado ? ` (${formatQty(extraRetirado)} sin pedido cargado)` : ""}</div></div>
     <div class="summary-tile"><div class="value">${formatQty(pendientePactado)}</div><div class="label">Por retirar (${pending.length} visitas)</div></div>
     <div class="summary-tile ${bad.length ? "sev-critical" : "sev-ok"}"><div class="value">${bad.length}</div><div class="label">Visitas fallidas/salteadas</div></div>
