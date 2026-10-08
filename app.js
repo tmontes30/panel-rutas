@@ -7,6 +7,8 @@ const VIEWER_MODE = document.documentElement.dataset.mode === "viewer";
 const excludeDescargaInput = document.getElementById("exclude-descarga");
 const onlyFbsInput = document.getElementById("only-fbs");
 const dateInput = document.getElementById("date");
+const dateToInput = document.getElementById("date-to");
+const rangePresetsEl = document.getElementById("range-presets");
 const searchInput = document.getElementById("search");
 const sellerListEl = document.getElementById("seller-list");
 const liveToggleBtn = document.getElementById("only-live-eta");
@@ -118,7 +120,26 @@ function getWorkingData() {
   };
 }
 
-if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
+// Fecha local YYYY-MM-DD (toISOString usa UTC: de noche en Chile daria mañana).
+function isoLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatDay(iso) {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+// Etiqueta de lo cargado: un dia ("2026-10-08") o un rango ("2026-09-15_a_2026-10-14").
+function dataLabel(data) {
+  return data?.is_range ? `${data.date}_a_${data.date_to}` : data?.date || "";
+}
+
+function dataLabelHuman(data) {
+  return data?.is_range ? `del ${formatDay(data.date)} al ${formatDay(data.date_to)} (${data.days} días)` : `del ${formatDay(data.date)}`;
+}
+
+if (dateInput) dateInput.value = isoLocal(new Date());
 
 // Todo texto que viene de SimpliRoute (nombres, direcciones, comentarios
 // libres del chofer) pasa por aca antes de entrar a innerHTML - en el link
@@ -416,6 +437,7 @@ function render() {
     retrievedShown += cargoStops.reduce((sum, s) => sum + pickedUpQty(s), 0);
 
     vehicleBlocks.push({
+      plan_date: data.is_range ? vehicle.plan_date : null,
       vehicle_name: vehicle.vehicle_name,
       driver_name: vehicle.driver_name,
       routes: routeBlocks,
@@ -446,12 +468,22 @@ function render() {
     return;
   }
 
-  for (const block of vehicleBlocks) {
+  // En rangos largos hay miles de tarjetas: se dibujan las primeras
+  // MAX_VEHICLE_CARDS. Las tarjetas de totales de arriba si suman todo.
+  if (vehicleBlocks.length > MAX_VEHICLE_CARDS) {
+    const note = document.createElement("div");
+    note.className = "empty";
+    note.textContent = `Se muestran ${MAX_VEHICLE_CARDS} de ${vehicleBlocks.length} rutas de vehículo. Usa el buscador de seller para encontrar una en particular; los totales de arriba sí incluyen todas.`;
+    resultsEl.appendChild(note);
+  }
+
+  for (const block of vehicleBlocks.slice(0, MAX_VEHICLE_CARDS)) {
     const card = document.createElement("div");
     card.className = "vehicle-card";
 
     const title = document.createElement("h2");
-    title.textContent = block.vehicle_name || "Vehículo";
+    // En un rango, el mismo camion aparece una vez por dia: se antepone la fecha.
+    title.textContent = (block.plan_date ? `${formatDay(block.plan_date)} · ` : "") + (block.vehicle_name || "Vehículo");
     card.appendChild(title);
 
     const driver = document.createElement("div");
@@ -520,10 +552,17 @@ function renderInsightCard(container, { severity, title, description, rows, colu
     empty.textContent = emptyText;
     card.appendChild(empty);
   } else {
+    if (rows.length > MAX_TABLE_ROWS) {
+      const more = document.createElement("p");
+      more.className = "insight-desc";
+      more.textContent = `Se muestran las primeras ${MAX_TABLE_ROWS} de ${rows.length}.`;
+      card.appendChild(more);
+    }
     const table = document.createElement("table");
     table.innerHTML = `
       <thead><tr>${columns.map((c) => `<th>${c.label}</th>`).join("")}</tr></thead>
       <tbody>${rows
+        .slice(0, MAX_TABLE_ROWS)
         .map((row) => `<tr>${columns.map((c) => `<td>${c.render(row)}</td>`).join("")}</tr>`)
         .join("")}</tbody>
     `;
@@ -550,7 +589,7 @@ function renderAnalysis() {
   // 1) Ventana vencida y la parada sigue pendiente: la alerta roja que pediste.
   const overdueNoVisit = stops
     .filter((s) => (s.status || "pending").toLowerCase() === "pending")
-    .map((s) => ({ ...s, windowEndDate: parseLocalDateTime(planDate, s.window_end) }))
+    .map((s) => ({ ...s, windowEndDate: parseLocalDateTime(s.planned_date || planDate, s.window_end) }))
     .filter((s) => s.windowEndDate && s.windowEndDate.getTime() < now.getTime())
     .map((s) => ({ ...s, overdueMin: (now - s.windowEndDate) / 60000 }))
     .sort((a, b) => b.overdueMin - a.overdueMin);
@@ -562,7 +601,7 @@ function renderAnalysis() {
     .map((s) => ({
       ...s,
       etaDate: new Date(s.current_eta),
-      windowEndDate: parseLocalDateTime(planDate, s.window_end),
+      windowEndDate: parseLocalDateTime(s.planned_date || planDate, s.window_end),
     }))
     .filter(
       (s) =>
@@ -581,7 +620,7 @@ function renderAnalysis() {
     .map((s) => ({
       ...s,
       checkinDate: new Date(s.checkin_time),
-      windowStartDate: parseLocalDateTime(planDate, s.window_start),
+      windowStartDate: parseLocalDateTime(s.planned_date || planDate, s.window_start),
     }))
     .filter((s) => s.windowStartDate && s.checkinDate.getTime() < s.windowStartDate.getTime())
     .map((s) => ({ ...s, earlyMin: (s.windowStartDate - s.checkinDate) / 60000 }))
@@ -593,7 +632,7 @@ function renderAnalysis() {
     .map((s) => ({
       ...s,
       checkinDate: new Date(s.checkin_time),
-      windowEndDate: parseLocalDateTime(planDate, s.window_end),
+      windowEndDate: parseLocalDateTime(s.planned_date || planDate, s.window_end),
     }))
     .filter((s) => s.windowEndDate && s.checkinDate.getTime() > s.windowEndDate.getTime())
     .map((s) => ({ ...s, lateMin: (s.checkinDate - s.windowEndDate) / 60000 }))
@@ -617,8 +656,8 @@ function renderAnalysis() {
   });
   const onTime = visitedStops.filter((s) => {
     const checkin = new Date(s.checkin_time);
-    const ws = parseLocalDateTime(planDate, s.window_start);
-    const we = parseLocalDateTime(planDate, s.window_end);
+    const ws = parseLocalDateTime(s.planned_date || planDate, s.window_start);
+    const we = parseLocalDateTime(s.planned_date || planDate, s.window_end);
     if (!ws || !we) return false;
     return checkin.getTime() >= ws.getTime() && checkin.getTime() <= we.getTime();
   }).length;
@@ -767,8 +806,8 @@ let vista1Selected = null;
 // estas mismas filas, asi un numero nunca cuenta distinto entre arboles.
 function classifyVista1Stop(stop, planDate, now) {
   const st = (stop.status || "pending").toLowerCase();
-  const ws = parseLocalDateTime(planDate, stop.window_start);
-  const we = parseLocalDateTime(planDate, stop.window_end);
+  const ws = parseLocalDateTime(stop.planned_date || planDate, stop.window_start);
+  const we = parseLocalDateTime(stop.planned_date || planDate, stop.window_end);
   const checkin = stop.checkin_time ? new Date(stop.checkin_time) : null;
   const checkout = stop.checkout_time ? new Date(stop.checkout_time) : null;
   const row = {
@@ -1092,7 +1131,7 @@ function renderAvance() {
   const now = new Date();
   const rows = stops.map((s) => {
     const st = (s.status || "pending").toLowerCase();
-    const we = parseLocalDateTime(data.date, s.window_end);
+    const we = parseLocalDateTime(s.planned_date || data.date, s.window_end);
     const eta = s.current_eta ? new Date(s.current_eta) : null;
     const isPending = st === "pending";
     return {
@@ -1144,7 +1183,7 @@ function renderAvance() {
   progress.className = "progress-section";
   progress.innerHTML = `
     <div class="progress-header">
-      <span class="title">Avance de bultos del día</span>
+      <span class="title">Avance de bultos ${data.is_range ? "del período" : "del día"}</span>
       <span class="value"><strong>${formatQty(retirado)}</strong> retirados de ${formatQty(totalPactado)} pactados (${pctText(retirado, totalPactado)})</span>
     </div>
     <div class="progress-bar">
@@ -1157,7 +1196,7 @@ function renderAvance() {
       <span class="lg-pending">${formatQty(pendientePactado)} por retirar</span>
     </div>
     <div class="dif-breakdown">
-      <strong>Diferencia del día: ${formatQty(totalPactado)} pactados − ${formatQty(retirado)} retirados = <span class="${diferenciaDia > 0 ? "dif-neg" : "dif-pos"}">${formatQty(diferenciaDia)}</span></strong>
+      <strong>Diferencia ${data.is_range ? "del período" : "del día"}: ${formatQty(totalPactado)} pactados − ${formatQty(retirado)} retirados = <span class="${diferenciaDia > 0 ? "dif-neg" : "dif-pos"}">${formatQty(diferenciaDia)}</span></strong>
       <ul>
         <li>${formatQty(perdidoFallidas)} en visitas fallidas/salteadas</li>
         <li>${difCompletadas >= 0
@@ -1193,7 +1232,8 @@ function renderAvance() {
          <strong>${formatQty(projectedFinal)}</strong> bultos retirados de ${formatQty(totalPactado)} (${pctText(projectedFinal, totalPactado)}),
          es decir, quedarían <strong>${formatQty(Math.max(totalPactado - projectedFinal, 0))}</strong> bultos sin retirar.
          Ya hay ${overdue.length} visita(s) atrasada(s) con ${formatQty(sum(overdue, "pactado"))} bultos y ${atRisk.length} más en riesgo según el ETA en vivo.</p>`;
-  avanceResultsEl.appendChild(projection);
+  // La proyeccion "de cierre del dia" no aplica a un rango de dias.
+  if (!data.is_range) avanceResultsEl.appendChild(projection);
 
   // Avance por hora de inicio de ventana: muestra donde se esta acumulando el atraso.
   const byHour = new Map();
@@ -1420,7 +1460,7 @@ function downloadCumplimientoCsv() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `simpliroute_cumplimiento_${lastData.date}.csv`;
+  a.download = `simpliroute_cumplimiento_${dataLabel(lastData)}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1507,7 +1547,14 @@ function renderDurations() {
 
   const longThreshold = avgMin !== null ? avgMin * 1.5 : Infinity;
 
-  stops.forEach((s) => {
+  if (stops.length > MAX_TABLE_ROWS) {
+    const more = document.createElement("p");
+    more.className = "insight-desc";
+    more.textContent = `Se muestran las primeras ${MAX_TABLE_ROWS} de ${stops.length} visitas (los totales de arriba incluyen todas).`;
+    durationResultsEl.appendChild(more);
+  }
+
+  stops.slice(0, MAX_TABLE_ROWS).forEach((s) => {
     const tr = document.createElement("tr");
     if (s.durationMin > longThreshold) tr.classList.add("current-stop");
     const statusKey = (s.status || "").toLowerCase();
@@ -1575,7 +1622,7 @@ function getSabanaRows() {
   const data = getWorkingData();
   if (!data) return [];
   const query = sabanaSearchInput.value.trim().toLowerCase();
-  let rows = flattenAllStops(data).map((r) => ({ ...r, planned_date: data.date }));
+  let rows = flattenAllStops(data).map((r) => ({ ...r, planned_date: r.planned_date || data.date }));
   if (query) {
     rows = rows.filter((r) => (r.seller_name || "").toLowerCase().includes(query));
   }
@@ -1594,10 +1641,16 @@ function renderSabana() {
     return;
   }
 
+  // Con rangos largos son miles de filas: en pantalla se muestran las primeras
+  // MAX_TABLE_ROWS (el navegador se pone lento); el CSV siempre baja todas.
+  const shown = rows.slice(0, MAX_TABLE_ROWS);
+  if (rows.length > shown.length) {
+    sabanaCountEl.textContent = `${rows.length} fila(s). En pantalla se ven las primeras ${shown.length}; el CSV trae todas.`;
+  }
   const table = document.createElement("table");
   table.innerHTML = `
     <thead><tr>${SABANA_COLUMNS.map((c) => `<th>${c.header}</th>`).join("")}</tr></thead>
-    <tbody>${rows
+    <tbody>${shown
       .map((r) => `<tr>${SABANA_COLUMNS.map((c) => `<td>${esc(c.get(r))}</td>`).join("")}</tr>`)
       .join("")}</tbody>
   `;
@@ -1626,7 +1679,7 @@ function downloadCsv() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `simpliroute_rutas_${lastData.date}.csv`;
+  a.download = `simpliroute_rutas_${dataLabel(lastData)}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1800,7 +1853,7 @@ function renderFailed() {
 }
 
 const FAILED_COLUMNS = [
-  { header: "Fecha", get: (r) => lastData?.date || "" },
+  { header: "Fecha", get: (r) => r.planned_date || lastData?.date || "" },
   { header: "Seller", get: (r) => r.seller_name || "" },
   { header: "Seller ID", get: (r) => sellerIdLabelPlain(r) },
   { header: "Vehículo", get: (r) => r.vehicle_name || "" },
@@ -1828,7 +1881,7 @@ function downloadFailedCsv() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `simpliroute_fallidos_${lastData.date}.csv`;
+  a.download = `simpliroute_fallidos_${dataLabel(lastData)}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1853,42 +1906,135 @@ function switchTab(tabName) {
   if (tabName === "usuarios") loadViewers();
 }
 
+// Solo se dibuja la pestaña visible (con rangos de un mes, dibujar las 8 juntas
+// tardaba decenas de segundos). switchTab() dibuja la que se abre.
+const TAB_RENDERERS = {
+  rutas: () => render(),
+  avance: () => renderAvance(),
+  vista1: () => renderVista1(),
+  cumplimiento: () => renderCumplimiento(),
+  analisis: () => renderAnalysis(),
+  duracion: () => renderDurations(),
+  sabana: () => renderSabana(),
+  fallidos: () => renderFailed(),
+};
+
+function activeTabName() {
+  return [...tabButtons].find((b) => b.classList.contains("active"))?.dataset.tab || "rutas";
+}
+
 function renderAllTabs() {
   const data = getWorkingData();
   if (data) populateSellerDatalist(data);
-  render();
-  renderAvance();
-  renderVista1();
-  renderCumplimiento();
-  renderAnalysis();
-  renderDurations();
-  renderSabana();
-  renderFailed();
+  TAB_RENDERERS[activeTabName()]?.();
+}
+
+const MAX_RANGE_DAYS = 62; // igual que server.py
+const MAX_TABLE_ROWS = 1500;
+const MAX_VEHICLE_CARDS = 300;
+
+function daysBetween(from, to) {
+  const days = [];
+  const d = new Date(`${from}T12:00:00`);
+  const end = new Date(`${to}T12:00:00`);
+  while (d <= end) {
+    days.push(isoLocal(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return days;
+}
+
+async function fetchJson(url) {
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `Error ${resp.status}`);
+  return data;
 }
 
 async function loadData() {
-  const targetDate = dateInput.value;
+  const from = dateInput.value;
+  const to = dateToInput?.value || "";
+  if (!from) {
+    statusLine.textContent = 'Elige la fecha "Desde".';
+    return;
+  }
+  const isRange = to && to !== from;
+  if (isRange && to < from) {
+    statusLine.textContent = 'La fecha "Hasta" es anterior a "Desde".';
+    return;
+  }
+  const days = isRange ? daysBetween(from, to) : [from];
+  if (days.length > MAX_RANGE_DAYS) {
+    statusLine.textContent = `El rango es de ${days.length} días; el máximo es ${MAX_RANGE_DAYS}.`;
+    return;
+  }
+
   refreshBtn.disabled = true;
-  statusLine.textContent = "Consultando SimpliRoute...";
-
+  if (publishBtn) publishBtn.disabled = true;
   try {
-    const resp = await fetch(`/api/route-status?date=${encodeURIComponent(targetDate)}`);
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      statusLine.textContent = `Error: ${data.error || resp.status}`;
-      return;
+    let data;
+    if (!isRange) {
+      statusLine.textContent = "Consultando SimpliRoute...";
+      data = await fetchJson(`/api/route-status?date=${encodeURIComponent(from)}`);
+    } else {
+      // De a un dia, en orden (nunca en paralelo, para no cargar la API de la
+      // empresa). Los dias pasados ya consultados salen de la memoria del server.
+      for (const [i, d] of days.entries()) {
+        statusLine.textContent = `Cargando ${formatDay(d)} (día ${i + 1} de ${days.length})...`;
+        try {
+          await fetchJson(`/api/route-status?date=${d}&part=1`);
+        } catch {
+          // SimpliRoute a veces responde 500 suelto: un reintento tras 3 s.
+          statusLine.textContent = `Reintentando ${formatDay(d)}...`;
+          await new Promise((r) => setTimeout(r, 3000));
+          try {
+            await fetchJson(`/api/route-status?date=${d}&part=1`);
+          } catch (err) {
+            throw new Error(`falló el ${formatDay(d)}: ${err.message}`);
+          }
+        }
+      }
+      statusLine.textContent = "Armando el rango...";
+      data = await fetchJson(`/api/route-range?from=${from}&to=${to}`);
     }
 
     lastData = data;
-    statusLine.textContent = `Actualizado ${new Date().toLocaleTimeString()} — ${data.vehicles?.length || 0} vehículo(s).`;
+    statusLine.textContent = `Actualizado ${new Date().toLocaleTimeString()} — datos ${dataLabelHuman(data)}, ${data.vehicles?.length || 0} ruta(s) de vehículo.`;
     if (publishBtn) publishBtn.disabled = false;
     renderAllTabs();
   } catch (err) {
-    statusLine.textContent = `No se pudo conectar al servidor local: ${err.message}`;
+    statusLine.textContent = `No se pudo cargar: ${err.message}`;
+    if (publishBtn) publishBtn.disabled = !lastData;
   } finally {
     refreshBtn.disabled = false;
   }
+}
+
+// Rangos rapidos. "15 al 14" = el periodo de cierre que contiene a hoy.
+function applyRangePreset(preset) {
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  let from;
+  let to;
+  if (preset === "today") {
+    from = today;
+    to = null;
+  } else if (preset === "month") {
+    from = new Date(y, m, 1);
+    to = new Date(y, m + 1, 0);
+  } else if (preset === "prev-month") {
+    from = new Date(y, m - 1, 1);
+    to = new Date(y, m, 0);
+  } else if (preset === "15-14") {
+    const startMonth = today.getDate() >= 15 ? m : m - 1;
+    from = new Date(y, startMonth, 15);
+    to = new Date(y, startMonth + 1, 14);
+  }
+  // No tiene sentido pedir dias futuros: se corta en hoy.
+  if (to && to > today) to = today;
+  dateInput.value = isoLocal(from);
+  dateToInput.value = to && isoLocal(to) !== isoLocal(from) ? isoLocal(to) : "";
 }
 
 // ---------- Solo owner: llamadas a los endpoints locales protegidos ----------
@@ -2050,11 +2196,19 @@ window.srLoadSnapshot = (snapshot, meta) => {
   const published = new Date(meta.published_at);
   statusLine.textContent =
     `Datos publicados el ${published.toLocaleDateString()} a las ${published.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` +
-    ` (ruta del ${snapshot.date}) — ${snapshot.vehicles?.length || 0} vehículo(s).`;
+    ` (rutas ${dataLabelHuman(snapshot)}) — ${snapshot.vehicles?.length || 0} ruta(s) de vehículo.`;
   renderAllTabs();
 };
 
 if (refreshBtn) refreshBtn.addEventListener("click", loadData);
+if (rangePresetsEl) {
+  rangePresetsEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segment");
+    if (!btn) return;
+    applyRangePreset(btn.dataset.preset);
+    loadData();
+  });
+}
 if (publishBtn) publishBtn.addEventListener("click", publishSnapshot);
 searchInput.addEventListener("input", render);
 
