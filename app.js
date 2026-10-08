@@ -134,18 +134,18 @@ function esc(value) {
 
 // Cruce local contra "Titulos simpli.xlsx" (via server.py) - no siempre
 // matchea (sobre todo visitas FBF/Devolucion), por eso el fallback a "-".
-// Cuando matchea por nombre "pelado" (no exacto) se lo marca con un "~" y
-// tooltip, para no mostrar la misma confianza que un match exacto.
+// Los matches por nombre "pelado" (no exacto) se muestran igual que los
+// exactos, sin marca: el usuario los copia tal cual para usarlos. Solo queda
+// un tooltip que avisa que fue aproximado.
 function sellerIdLabel(stop) {
   if (!stop.seller_id) return "-";
   if (stop.seller_id_exact) return esc(stop.seller_id);
-  return `<span title="Coincidencia aproximada por nombre (no exacta)">${esc(stop.seller_id)} ~</span>`;
+  return `<span title="Coincidencia aproximada por nombre (no exacta)">${esc(stop.seller_id)}</span>`;
 }
 
 // Misma info que sellerIdLabel pero en texto plano, para CSV (sin HTML).
 function sellerIdLabelPlain(stop) {
-  if (!stop.seller_id) return "";
-  return stop.seller_id_exact ? stop.seller_id : `${stop.seller_id} (aprox.)`;
+  return stop.seller_id || "";
 }
 
 const STATUS_LABELS = {
