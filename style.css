@@ -147,6 +147,38 @@ input, button, select {
   color: var(--fail);
 }
 
+/* ---------- Pestaña Avisos (solo owner) ---------- */
+
+#avisos-toggle {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.aviso-bubble {
+  background: rgba(63, 191, 120, 0.14);
+  border: 1px solid rgba(63, 191, 120, 0.35);
+  border-radius: 10px 10px 10px 2px;
+  padding: 6px 10px;
+  max-width: 420px;
+  min-width: 240px;
+  white-space: pre-line;
+  font-size: 0.85rem;
+}
+
+.aviso-hora {
+  white-space: nowrap;
+}
+
+.aviso-motivo {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
+.aviso-sin-tel {
+  color: var(--pending);
+}
+
 /* ---------- Link compartido: login ---------- */
 
 /* Hasta descifrar, en el link compartido solo existe la pantalla de login. */
