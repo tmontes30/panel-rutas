@@ -1904,6 +1904,7 @@ function switchTab(tabName) {
   if (tabName === "sabana") renderSabana();
   if (tabName === "fallidos") renderFailed();
   if (tabName === "usuarios") loadViewers();
+  if (tabName === "avisos") loadAvisos();
 }
 
 // Solo se dibuja la pestaña visible (con rangos de un mes, dibujar las 8 juntas
@@ -2187,6 +2188,196 @@ if (viewerForm) {
     setPasswordVisibility(true);
     showViewerMsg("Clave generada: copiala ahora y pasásela a la persona por un canal distinto al link. No se va a volver a mostrar.", false);
   });
+}
+
+// ---------- Pestaña Avisos (solo owner): simulación de WhatsApp a sellers ----------
+// No envía nada: muestra lo que avisos.py anotó como "simulado".
+
+const avisosToggleBtn = document.getElementById("avisos-toggle");
+const avisosStatusEl = document.getElementById("avisos-status");
+const avisosIntervaloEl = document.getElementById("avisos-intervalo");
+const avisosMsgEl = document.getElementById("avisos-msg");
+const avisosSummaryEl = document.getElementById("avisos-summary");
+const avisosResultsEl = document.getElementById("avisos-results");
+const avisosSearchInput = document.getElementById("avisos-search");
+const avisosFilterEl = document.getElementById("avisos-filter");
+const AVISOS_REFRESH_MS = 30000;
+const AVISO_TIPO_LABELS = { dia: "Aviso del día", proximo: "Eres el próximo" };
+let avisosState = null;
+let avisosTipo = "all";
+
+function avisoAnticipacionLabel(aviso) {
+  if (aviso.tipo !== "proximo") return "-";
+  if (aviso.anticipacion_min === null || aviso.anticipacion_min === undefined) return "Camión aún no llega";
+  if (aviso.anticipacion_min < 0) return `Camión llegó ${-aviso.anticipacion_min} min antes del aviso`;
+  return `${aviso.anticipacion_min} min antes de llegar`;
+}
+
+// Los avisos que pasan el filtro de la pestaña (seller y tipo): tabla y CSV.
+function getAvisosRows() {
+  if (!avisosState) return [];
+  const query = avisosSearchInput.value.trim().toLowerCase();
+  return avisosState.avisos.filter(
+    (a) => (avisosTipo === "all" || a.tipo === avisosTipo) && (!query || (a.seller_name || "").toLowerCase().includes(query))
+  );
+}
+
+const AVISOS_COLUMNS = [
+  { header: "Fecha", get: (a) => (a.hora || "").slice(0, 10) },
+  { header: "Hora del aviso", get: (a) => (a.hora || "").slice(11, 16) },
+  { header: "Aviso", get: (a) => AVISO_TIPO_LABELS[a.tipo] || a.tipo },
+  { header: "Motivo", get: (a) => a.motivo },
+  { header: "Seller", get: (a) => a.seller_name },
+  { header: "Seller ID", get: (a) => a.seller_id || "" },
+  { header: "Camión", get: (a) => a.vehicle_name || "" },
+  { header: "Chofer", get: (a) => a.driver_name || "" },
+  { header: "Ventana horaria", get: (a) => a.ventana || "" },
+  { header: "Carga 2", get: (a) => a.carga_2 || "" },
+  { header: "Mensaje", get: (a) => a.texto },
+  { header: "Teléfono cargado", get: (a) => (a.tiene_telefono ? "Sí" : "No") },
+  { header: "Llegada del camión (check-in)", get: (a) => formatDateTimeFull(a.checkin_time) },
+  { header: "Anticipación (min)", get: (a) => a.anticipacion_min ?? "" },
+];
+
+function downloadAvisosCsv() {
+  const rows = getAvisosRows();
+  if (rows.length === 0) return;
+
+  const lines = [AVISOS_COLUMNS.map((c) => csvEscape(c.header)).join(",")];
+  for (const row of rows) {
+    lines.push(AVISOS_COLUMNS.map((c) => csvEscape(c.get(row))).join(","));
+  }
+  const csvContent = "﻿" + lines.join("\r\n");
+
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `simpliroute_avisos_simulados_${avisosState.fecha}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function renderAvisos() {
+  if (!avisosResultsEl || !avisosState) return;
+  const st = avisosState;
+
+  avisosToggleBtn.textContent = st.activa ? "⏹ Detener simulación" : "▶ Iniciar simulación";
+  avisosToggleBtn.classList.toggle("danger-btn", st.activa);
+  // No se redibuja la lista mientras el owner la tiene abierta.
+  if (document.activeElement !== avisosIntervaloEl) {
+    const opciones = [...new Set([...st.opciones_intervalo_min, st.intervalo_min])].sort((a, b) => a - b);
+    avisosIntervaloEl.innerHTML = opciones
+      .map((m) => `<option value="${esc(m)}"${m === st.intervalo_min ? " selected" : ""}>${esc(m)} min</option>`)
+      .join("");
+  }
+  const parts = [st.activa ? `Simulación prendida (revisa cada ${st.intervalo_min} min, entre ${st.hora_inicio} y ${st.hora_fin})` : "Simulación detenida"];
+  if (st.ultimo_ciclo) parts.push(`última revisión ${formatEta(st.ultimo_ciclo)}`);
+  if (st.proximo_ciclo) parts.push(`próxima ${formatEta(st.proximo_ciclo)}`);
+  avisosStatusEl.textContent = parts.join(" · ");
+
+  const warnings = [];
+  if (st.ultimo_error) warnings.push(`⚠️ La última revisión falló (${st.ultimo_error}). Se reintenta sola, esperando más tiempo.`);
+  if (!st.hay_planilla_telefonos) warnings.push("Todavía no hay planilla de teléfonos cargada: todos los sellers aparecen sin teléfono.");
+  avisosMsgEl.hidden = warnings.length === 0;
+  avisosMsgEl.textContent = warnings.join(" ");
+
+  const r = st.resumen;
+  avisosSummaryEl.innerHTML = `
+    <div class="summary-strip">
+      <div class="summary-tile"><div class="value">${formatQty(r.avisos_dia)}</div><div class="label">Avisos del día simulados</div></div>
+      <div class="summary-tile"><div class="value">${formatQty(r.avisos_proximo)}</div><div class="label">"Eres el próximo" simulados</div></div>
+      <div class="summary-tile ${r.sellers_sin_telefono ? "sev-warning" : "sev-ok"}"><div class="value">${formatQty(r.sellers_sin_telefono)}</div><div class="label">Sellers sin teléfono</div></div>
+      <div class="summary-tile" title="Mediana de minutos entre el aviso 'eres el próximo' y la llegada real del camión (${esc(r.anticipaciones_medidas)} medidos)"><div class="value">${r.anticipacion_mediana_min === null ? "-" : `${esc(r.anticipacion_mediana_min)} min`}</div><div class="label">Anticipación típica del "próximo"</div></div>
+    </div>`;
+
+  const rows = getAvisosRows();
+  if (rows.length === 0) {
+    avisosResultsEl.innerHTML = `<div class="empty">${
+      st.avisos.length
+        ? "Ningún aviso coincide con el filtro."
+        : st.activa
+          ? `Todavía no hay avisos para hoy. El "aviso del día" sale desde las ${esc(st.hora_aviso_dia)}.`
+          : 'Aprieta "Iniciar simulación" para ver qué avisos saldrían hoy.'
+    }</div>`;
+    return;
+  }
+
+  const shown = rows.slice(0, MAX_TABLE_ROWS);
+  avisosResultsEl.innerHTML = `
+    <div class="table-scroll"><table>
+      <thead><tr><th>Hora</th><th>Aviso</th><th>Seller</th><th>Seller ID</th><th>Camión</th><th>Ventana horaria</th><th>Carga 2</th><th>Mensaje que le llegaría</th><th>Teléfono</th><th>Anticipación</th></tr></thead>
+      <tbody>${shown
+        .map(
+          (a) => `<tr>
+            <td class="aviso-hora">${formatEta(a.hora)}</td>
+            <td title="${esc(a.motivo)}">${esc(AVISO_TIPO_LABELS[a.tipo] || a.tipo)}<div class="aviso-motivo">${esc(a.motivo)}</div></td>
+            <td>${esc(a.seller_name)}</td>
+            <td>${esc(a.seller_id || "-")}</td>
+            <td>${esc(a.vehicle_name || "-")}</td>
+            <td class="aviso-hora">${esc(a.ventana || "-")}</td>
+            <td>${esc(a.carga_2 || "-")}</td>
+            <td><div class="aviso-bubble">${esc(a.texto)}</div></td>
+            <td>${a.tiene_telefono ? "Sí" : '<span class="aviso-sin-tel">Sin teléfono cargado</span>'}</td>
+            <td>${esc(avisoAnticipacionLabel(a))}</td>
+          </tr>`
+        )
+        .join("")}</tbody>
+    </table></div>
+    ${rows.length > shown.length ? `<div class="empty">Se muestran ${shown.length} de ${rows.length} avisos.</div>` : ""}`;
+}
+
+async function loadAvisos() {
+  if (!avisosResultsEl) return;
+  try {
+    avisosState = await ownerFetch("/api/avisos");
+    renderAvisos();
+  } catch (err) {
+    avisosStatusEl.textContent = `No se pudo cargar la simulación: ${err.message}`;
+  }
+}
+
+async function toggleAvisos() {
+  avisosToggleBtn.disabled = true;
+  try {
+    avisosState = await ownerFetch("/api/avisos/simulacion", { method: "POST", body: { activa: !avisosState?.activa } });
+    renderAvisos();
+    // La primera revisión tarda unos segundos en traer las rutas.
+    if (avisosState.activa) setTimeout(loadAvisos, 12000);
+  } catch (err) {
+    avisosStatusEl.textContent = `No se pudo cambiar la simulación: ${err.message}`;
+  } finally {
+    avisosToggleBtn.disabled = false;
+  }
+}
+
+async function changeAvisosIntervalo() {
+  try {
+    avisosState = await ownerFetch("/api/avisos/intervalo", { method: "POST", body: { minutos: Number(avisosIntervaloEl.value) } });
+    avisosIntervaloEl.blur();
+    renderAvisos();
+  } catch (err) {
+    avisosStatusEl.textContent = `No se pudo cambiar el intervalo: ${err.message}`;
+  }
+}
+
+if (avisosToggleBtn) {
+  avisosToggleBtn.addEventListener("click", toggleAvisos);
+  avisosIntervaloEl.addEventListener("change", changeAvisosIntervalo);
+  document.getElementById("avisos-csv").addEventListener("click", downloadAvisosCsv);
+  avisosSearchInput.addEventListener("input", renderAvisos);
+  avisosFilterEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segment");
+    if (!btn) return;
+    avisosTipo = btn.dataset.tipo;
+    avisosFilterEl.querySelectorAll(".segment").forEach((s) => s.classList.toggle("active", s === btn));
+    renderAvisos();
+  });
+  setInterval(() => {
+    if (!tabPanels.avisos.hidden && !document.hidden) loadAvisos();
+  }, AVISOS_REFRESH_MS);
 }
 
 // ---------- Solo viewer: el link compartido carga un snapshot ya descifrado ----------
