@@ -5,11 +5,11 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://region1.google-analytics.com; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <meta name="robots" content="noindex, nofollow" />
   <meta name="referrer" content="no-referrer" />
-  <meta name="sr-build" content="d5cd8982ac0c" />
+  <meta name="sr-build" content="3e431cb730b7" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Visibilidad de rutas SimpliRoute</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚚</text></svg>" />
-  <link rel="stylesheet" href="style.css?v=22aee97eef" />
+  <link rel="stylesheet" href="style.css?v=fa1842e0b6" />
 </head>
 <body>
   <!--
@@ -43,6 +43,11 @@
         <button type="button" class="segment" data-ampm="am">AM (antes 12:30)</button>
         <button type="button" class="segment" data-ampm="pm">PM (después 12:30)</button>
       </div>
+    </div>
+    <!-- Solo aparece cuando lo cargado es un rango: filtra un dia sin volver a consultar. -->
+    <div class="toolbar-row" id="day-filter-row" hidden>
+      <span class="sort-label">Ver día</span>
+      <div class="segmented day-filter" id="day-filter" role="group" aria-label="Ver un día del rango"></div>
     </div>
   </div>
 
@@ -206,7 +211,7 @@
 
   
 
-  <script src="app.js?v=ac7c2e66ec"></script>
+  <script src="app.js?v=51323570ba"></script>
   <script src="viewer.js?v=035e8cf461"></script>
 </body>
 </html>
