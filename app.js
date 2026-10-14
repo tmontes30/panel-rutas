@@ -100,12 +100,23 @@ function matchesAmPmFilter(stop) {
   return amPmFilter === "am" ? mins < AM_PM_THRESHOLD_MIN : mins >= AM_PM_THRESHOLD_MIN;
 }
 
+// Dia elegido dentro de un rango ya cargado ("all" = todo el rango). Es solo un
+// filtro local: no vuelve a consultar SimpliRoute.
+let dayFilter = "all";
+
 function getWorkingData() {
   if (!lastData) return null;
-  if (!excludeDescargaInput.checked && !onlyFbsInput.checked && amPmFilter === "all") return lastData;
+  const dayActive = lastData.is_range && dayFilter !== "all";
+  if (!excludeDescargaInput.checked && !onlyFbsInput.checked && amPmFilter === "all" && !dayActive) return lastData;
+  // Con un dia elegido, los calculos se comportan como un dia suelto (ej.
+  // Avance vuelve a mostrar la proyeccion "del dia").
+  const base = dayActive
+    ? { ...lastData, date: dayFilter, date_to: dayFilter, is_range: false, days: 1, vehicles: lastData.vehicles.filter((v) => v.plan_date === dayFilter) }
+    : lastData;
+  if (!excludeDescargaInput.checked && !onlyFbsInput.checked && amPmFilter === "all") return base;
   return {
-    ...lastData,
-    vehicles: lastData.vehicles.map((v) => ({
+    ...base,
+    vehicles: base.vehicles.map((v) => ({
       ...v,
       routes: v.routes.map((r) => ({
         ...r,
@@ -2000,6 +2011,7 @@ async function loadData() {
     }
 
     lastData = data;
+    setupDayFilter();
     statusLine.textContent = `Actualizado ${new Date().toLocaleTimeString()} — datos ${dataLabelHuman(data)}, ${data.vehicles?.length || 0} ruta(s) de vehículo.`;
     if (publishBtn) publishBtn.disabled = false;
     renderAllTabs();
@@ -2384,6 +2396,7 @@ if (avisosToggleBtn) {
 
 window.srLoadSnapshot = (snapshot, meta) => {
   lastData = snapshot;
+  setupDayFilter();
   const published = new Date(meta.published_at);
   statusLine.textContent =
     `Datos publicados el ${published.toLocaleDateString()} a las ${published.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` +
@@ -2477,6 +2490,45 @@ amPmFilterEl.addEventListener("click", (e) => {
   amPmFilterEl.querySelectorAll(".segment").forEach((s) => s.classList.toggle("active", s === btn));
   renderAllTabs();
 });
+
+// ---------- Mini filtro "Ver día" (solo cuando lo cargado es un rango) ----------
+
+const dayFilterRowEl = document.getElementById("day-filter-row");
+const dayFilterEl = document.getElementById("day-filter");
+const WEEKDAYS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+
+// Se llama cada vez que cambian los datos: arma un boton por dia del rango y
+// vuelve a "Todo el rango".
+function setupDayFilter() {
+  dayFilter = "all";
+  if (!dayFilterRowEl) return;
+  if (!lastData?.is_range) {
+    dayFilterRowEl.hidden = true;
+    dayFilterEl.innerHTML = "";
+    return;
+  }
+  const visitsByDay = {};
+  for (const v of lastData.vehicles) {
+    for (const r of v.routes || []) visitsByDay[v.plan_date] = (visitsByDay[v.plan_date] || 0) + (r.stops || []).length;
+  }
+  const buttons = daysBetween(lastData.date, lastData.date_to).map((d) => {
+    const wd = WEEKDAYS[new Date(`${d}T12:00:00`).getDay()];
+    const empty = !visitsByDay[d];
+    return `<button type="button" class="segment${empty ? " empty-day" : ""}" data-day="${d}" title="${visitsByDay[d] || 0} visita(s)">${wd} ${d.slice(8, 10)}/${d.slice(5, 7)}</button>`;
+  });
+  dayFilterEl.innerHTML = `<button type="button" class="segment active" data-day="all">Todo el rango</button>${buttons.join("")}`;
+  dayFilterRowEl.hidden = false;
+}
+
+if (dayFilterEl) {
+  dayFilterEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segment");
+    if (!btn) return;
+    dayFilter = btn.dataset.day;
+    dayFilterEl.querySelectorAll(".segment").forEach((s) => s.classList.toggle("active", s === btn));
+    renderAllTabs();
+  });
+}
 
 failedSearchInput.addEventListener("input", renderFailed);
 downloadFailedCsvBtn.addEventListener("click", downloadFailedCsv);
