@@ -348,6 +348,16 @@ html[data-mode="viewer"] body:not(.unlocked) > :not(#login-overlay) {
   gap: 2px;
 }
 
+/* "Ver día": muchos botones (hasta 62), se reparten en varias líneas */
+.segmented.day-filter {
+  flex-wrap: wrap;
+  border-radius: 14px;
+}
+
+.segment.empty-day {
+  opacity: 0.45;
+}
+
 .sort-label {
   color: var(--muted);
   font-size: 0.8rem;
